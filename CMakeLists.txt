@@ -41,6 +41,24 @@ if(SO_PLATFORM_ORBIS)
     target_compile_options(suyu-orbis-render-probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_link_libraries(suyu-orbis-render-probe PRIVATE SceVideoOut)
     set_target_properties(suyu-orbis-render-probe PROPERTIES SUFFIX ".elf")
+
+    # LLD produces an intermediate ET_DYN ELF. The public OpenOrbis converter
+    # supplies the PS4 ELF type, dynamic metadata and NID imports required by
+    # shadPS4. Preserve the intermediate for symbol/debug inspection.
+    find_program(SO_CREATE_FSELF NAMES create-fself
+        HINTS "${OO_PS4_TOOLCHAIN}/bin/linux" "${OO_PS4_TOOLCHAIN}/bin/macos"
+        NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    add_custom_command(TARGET suyu-orbis-render-probe POST_BUILD
+        COMMAND "${SO_CREATE_FSELF}"
+            "-in=$<TARGET_FILE:suyu-orbis-render-probe>"
+            "-out=${CMAKE_CURRENT_BINARY_DIR}/suyu-orbis-render-probe.oelf"
+            --eboot "${CMAKE_CURRENT_BINARY_DIR}/suyu-orbis-render-probe-eboot.bin"
+            --paid 0x3800000000000011
+        BYPRODUCTS
+            "${CMAKE_CURRENT_BINARY_DIR}/suyu-orbis-render-probe.oelf"
+            "${CMAKE_CURRENT_BINARY_DIR}/suyu-orbis-render-probe-eboot.bin"
+        COMMENT "Converting render probe to PS4 ELF/SELF with OpenOrbis"
+        VERBATIM)
 endif()
 if(SO_MODULE_BUNDLE)
     if(NOT EXISTS "${SO_MODULE_BUNDLE}/CMakeLists.txt")
