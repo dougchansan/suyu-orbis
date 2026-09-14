@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {"major": 3, "minor": 24, "patch": 0},
+  "configurePresets": [
+    {"name": "host", "generator": "Ninja", "binaryDir": "${sourceDir}/build/host", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}},
+    {"name": "host-sanitize", "inherits": "host", "binaryDir": "${sourceDir}/build/host-sanitize", "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "SO_SANITIZE": "ON"}},
+    {"name": "orbis", "inherits": "host", "binaryDir": "${sourceDir}/build/orbis", "toolchainFile": "${sourceDir}/cmake/toolchains/openorbis.cmake", "cacheVariables": {"SO_BUILD_TESTS": "OFF"}}
+  ],
+  "buildPresets": [{"name": "host", "configurePreset": "host"}, {"name": "host-sanitize", "configurePreset": "host-sanitize"}, {"name": "orbis", "configurePreset": "orbis"}],
+  "testPresets": [{"name": "host", "configurePreset": "host", "output": {"outputOnFailure": true}}, {"name": "host-sanitize", "configurePreset": "host-sanitize", "output": {"outputOnFailure": true}}]
+}

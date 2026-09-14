@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Opt-in from a parent superbuild AFTER the real core and generated bundle exist.
+if(NOT TARGET core OR NOT TARGET so_module_bundle)
+    message(FATAL_ERROR "Bridge requires actual Suyu core and so_module_bundle targets")
+endif()
+if(NOT SUYU_NO_JIT)
+    message(FATAL_ERROR "Configure the actual Suyu core with SUYU_NO_JIT=ON")
+endif()
+enable_language(CXX)
+get_target_property(_core_dir core SOURCE_DIR)
+get_filename_component(_suyu_src "${_core_dir}" DIRECTORY)
+add_library(suyu_orbis_bridge STATIC suyu_bridge.cpp)
+target_compile_features(suyu_orbis_bridge PUBLIC cxx_std_20)
+target_include_directories(suyu_orbis_bridge PRIVATE "${_suyu_src}" PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(suyu_orbis_bridge PUBLIC core so_module_bundle)

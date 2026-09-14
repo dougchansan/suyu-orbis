@@ -1,0 +1,78 @@
+name: Host and OpenOrbis bring-up
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bringup-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host build and tests
+        run: |
+          cmake --preset host
+          cmake --build --preset host
+          ctest --preset host
+          python3 scripts/audit_binary.py build/host/suyu-orbis-probe
+      - name: Sanitizers
+        if: matrix.compiler == 'clang'
+        run: |
+          cmake --preset host-sanitize
+          cmake --build --preset host-sanitize
+          ctest --preset host-sanitize
+  upstream-and-orbis:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: dougchansan/suyu-v0.0.4
+          ref: e6f53df9f160903fd15ed2b0cd91ac60f1f43428
+          path: vendor/suyu
+          sparse-checkout: src/core/recompiler/arm64_to_c.h
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Install LLVM tool executables
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 lld-18 llvm-18 ninja-build unzip
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+      - name: Actual Suyu exporter integration (synthetic code only)
+        run: python3 scripts/test_upstream.py --cxx clang++
+      - name: Install public OpenOrbis release SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/toolchain-llvm-18.2.zip \
+            -o "$RUNNER_TEMP/openorbis.zip"
+          sha256sum "$RUNNER_TEMP/openorbis.zip"
+          unzip -q "$RUNNER_TEMP/openorbis.zip" -d "$RUNNER_TEMP/openorbis"
+          mapfile -t CRT < <(find "$RUNNER_TEMP/openorbis" -path '*/lib/crt1.o' -type f)
+          test "${#CRT[@]}" -eq 1
+          SDK="${CRT[0]%/lib/crt1.o}"
+          chmod +x "$SDK/bin/linux/create-fself"
+          echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
+      - name: Cross-build fixture probe and emitted AArch64 diagnostic
+        run: |
+          python3 scripts/build_orbis.py
+          python3 scripts/build_orbis.py --fixture-bundle build/upstream-fixture/bundle
+      - name: Record build-only evidence
+        run: |
+          echo '## OpenOrbis build evidence (not hardware execution)' >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat out/orbis/*/build_report.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+# No release publishing, game downloads, key material, or proprietary SDKs.
+# No binary artifacts are uploaded; build reports and hashes remain in logs.

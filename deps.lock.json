@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "suyu": {
+    "repository": "https://github.com/dougchansan/suyu-v0.0.4.git",
+    "commit": "e6f53df9f160903fd15ed2b0cd91ac60f1f43428",
+    "branch_at_audit": "mk8-recomp",
+    "emitter_path": "src/core/recompiler/arm64_to_c.h",
+    "emitter_git_blob": "60b552c1e93bb4cafda11955d37238a62c4acde3"
+  },
+  "openorbis": {
+    "repository": "https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain",
+    "reference_release": "v0.5.3",
+    "status": "externally installed SDK; actual path and tools checked by doctor.py"
+  },
+  "graphics_candidate": {
+    "repository": "https://github.com/PS4-OpenGNM/opengnm-stack",
+    "status": "not a build dependency; Suyu compatibility unvalidated"
+  }
+}
