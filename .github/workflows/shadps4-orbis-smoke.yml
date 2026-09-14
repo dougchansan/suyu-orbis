@@ -100,11 +100,20 @@ jobs:
           export SDL_AUDIODRIVER=dummy
           export ALSOFT_DRIVERS=null
 
+          cleanup() {
+            if [[ -n "${SHAD_PID:-}" ]]; then
+              kill "$SHAD_PID" 2>/dev/null || true
+            fi
+            if [[ -n "${XVFB_PID:-}" ]]; then
+              kill "$XVFB_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
           Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >xvfb.log 2>&1 &
           XVFB_PID=$!
-          trap 'kill $XVFB_PID 2>/dev/null || true; kill ${SHAD_PID:-0} 2>/dev/null || true' EXIT
           sleep 2
-          xdpyinfo -display :99 >/dev/null
+          xdotool getdisplaygeometry
 
           "$SHADPS4_BIN" --config-clean --fullscreen true \
             "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.elf" \
@@ -136,11 +145,15 @@ jobs:
             echo 'Guest render marker was not created; collecting a short syscall trace.'
             kill "$SHAD_PID" 2>/dev/null || true
             wait "$SHAD_PID" 2>/dev/null || true
+            SHAD_PID=""
             rm -f trace.*
             timeout 8s strace -ff -tt -s 256 -o trace \
               "$SHADPS4_BIN" --config-clean --fullscreen true \
               "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.elf" \
               >trace-stdout.log 2>&1 || true
+            echo '--- trace launcher output ---'
+            cat trace-stdout.log || true
+            echo '--- final syscalls ---'
             tail -n 120 trace.* || true
             exit 1
           fi
@@ -165,8 +178,6 @@ jobs:
           from PIL import Image
           im = Image.open('render-probe.png').convert('RGB')
           assert im.size == (1280, 720), im.size
-          # Sample the image on a coarse grid. A successful color-bar frame has
-          # many distinct RGB values; a blank/solid emulator window does not.
           colors = {im.getpixel((x, y)) for y in range(32, 720, 64) for x in range(32, 1280, 64)}
           print('captured distinct sampled colors:', len(colors), sorted(colors)[:20])
           assert len(colors) >= 6, colors
