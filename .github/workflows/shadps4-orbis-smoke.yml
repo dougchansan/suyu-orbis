@@ -134,6 +134,13 @@ jobs:
           set -euo pipefail
           EMU_DIR="$RUNNER_TEMP/shadps4-render"
           mkdir -p "$EMU_DIR/user/data" "$EMU_DIR/xdg"
+          # v0.18.0 CreateDefaultUsers() opens AskMigrationOption() whenever
+          # home/1000 does not exist, even on an empty install. This isolated
+          # CI profile has no saves to migrate. Create empty homes explicitly
+          # so the unmodified emulator can boot without a modal SDL dialog.
+          for user in 1000 1001 1002 1003; do
+            mkdir -p "$EMU_DIR/user/home/$user/"{savedata,trophy,inputs}
+          done
           chmod 700 "$EMU_DIR/xdg"
           cd "$EMU_DIR"
           export DISPLAY=:99
@@ -143,7 +150,9 @@ jobs:
           export ALSOFT_DRIVERS=null
           cleanup() {
             if [[ -n "${SHAD_PID:-}" ]]; then
-              kill "$SHAD_PID" 2>/dev/null || true
+              kill -- "-$SHAD_PID" 2>/dev/null || true
+              sleep 1
+              kill -9 -- "-$SHAD_PID" 2>/dev/null || true
             fi
             if [[ -n "${XVFB_PID:-}" ]]; then
               kill "$XVFB_PID" 2>/dev/null || true
@@ -154,7 +163,8 @@ jobs:
           XVFB_PID=$!
           sleep 2
           xdotool getdisplaygeometry
-          "$SHADPS4_BIN" --config-clean --fullscreen true \
+          rm -f user/data/suyu-orbis-render-probe.json
+          setsid "$SHADPS4_BIN" --config-clean --fullscreen true \
             "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.oelf" \
             >shadps4-stdout.log 2>&1 &
           SHAD_PID=$!
@@ -172,14 +182,18 @@ jobs:
           echo '--- launcher stdout/stderr ---'
           cat shadps4-stdout.log || true
           echo '--- shadPS4 logs ---'
-          for f in user/log/*.log; do
-            test -f "$f" && { echo "### $f"; cat "$f"; }
+          for f in user/log/*.log user/log/*.txt; do
+            test -f "$f" && { echo "### $f"; tail -200 "$f"; }
           done
           echo '--- user files ---'
           find user -maxdepth 3 -type f -print
           if test "$found" -ne 1; then
             echo 'Guest render marker was not created; collecting a short syscall trace.'
-            kill "$SHAD_PID" 2>/dev/null || true
+            ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size 1280x720 \
+              -i :99 -frames:v 1 startup-failure.png || true
+            kill -- "-$SHAD_PID" 2>/dev/null || true
+            sleep 1
+            kill -9 -- "-$SHAD_PID" 2>/dev/null || true
             wait "$SHAD_PID" 2>/dev/null || true
             SHAD_PID=""
             rm -f trace.*
