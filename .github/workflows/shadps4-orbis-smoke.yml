@@ -53,13 +53,23 @@ jobs:
           chmod +x "$SDK/bin/linux/create-fself"
           echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
 
-      - name: Cross-build render probe
+      - name: Cross-build and verify converted PS4 ELF
         run: |
           cmake --preset orbis
           cmake --build build/orbis --target suyu-orbis-render-probe --parallel 2
-          test -s build/orbis/suyu-orbis-render-probe.elf
-          file build/orbis/suyu-orbis-render-probe.elf
+          test -s build/orbis/suyu-orbis-render-probe.oelf
+          file build/orbis/suyu-orbis-render-probe.elf build/orbis/suyu-orbis-render-probe.oelf
           llvm-nm -C build/orbis/suyu-orbis-render-probe.elf | grep -E 'sceVideoOut(Open|RegisterBuffers|SubmitFlip)|sceKernel(MapDirectMemory|AllocateDirectMemory)'
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+          data = Path('build/orbis/suyu-orbis-render-probe.oelf').read_bytes()
+          assert data[:4] == b'\x7fELF', 'Missing ELF header'
+          assert data[7] == 9, f'Expected FreeBSD OSABI, got {data[7]}'
+          elf_type = struct.unpack_from('<H', data, 16)[0]
+          assert elf_type == 0xfe10, f'Expected ET_SCE_DYNEXEC, got {elf_type:#x}'
+          print('Converted PS4 ELF: FreeBSD OSABI, ET_SCE_DYNEXEC (0xfe10).')
+          PY
 
       - name: Download pinned official shadPS4 SDL release
         shell: bash
@@ -93,8 +103,7 @@ jobs:
           original=$(sysctl -n vm.mmap_min_addr)
           echo "SHADPS4_MMAP_MIN_ADDR_ORIGINAL=$original" >> "$GITHUB_ENV"
           printf 'Original vm.mmap_min_addr=%s\n' "$original" | tee "$RUNNER_TEMP/shadps4-render/mmap-policy.txt"
-          # shadPS4 reserves low guest addresses, including zero. This exception
-          # is limited to the disposable hosted VM; the emulator is NOT root.
+          # Limit this exception to the disposable hosted VM; the emulator is NOT root.
           sudo sysctl -w vm.mmap_min_addr=0 | tee -a "$RUNNER_TEMP/shadps4-render/mmap-policy.txt"
           python3 - <<'PY'
           import ctypes
@@ -105,9 +114,7 @@ jobs:
           libc.mmap.restype = ctypes.c_void_p
           libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
           libc.munmap.restype = ctypes.c_int
-          # Only test the zero page: the host Python binary may occupy 0x400000.
           size = os.sysconf('SC_PAGE_SIZE')
-          # MAP_FIXED_NOREPLACE avoids replacing an existing process mapping.
           result = libc.mmap(None, size, 0, 0x100000 | 0x02 | 0x20, -1, 0)
           if result == ctypes.c_void_p(-1).value:
               error = ctypes.get_errno()
@@ -129,13 +136,11 @@ jobs:
           mkdir -p "$EMU_DIR/user/data" "$EMU_DIR/xdg"
           chmod 700 "$EMU_DIR/xdg"
           cd "$EMU_DIR"
-
           export DISPLAY=:99
           export XDG_RUNTIME_DIR="$EMU_DIR/xdg"
           export SDL_VIDEODRIVER=x11
           export SDL_AUDIODRIVER=dummy
           export ALSOFT_DRIVERS=null
-
           cleanup() {
             if [[ -n "${SHAD_PID:-}" ]]; then
               kill "$SHAD_PID" 2>/dev/null || true
@@ -145,17 +150,14 @@ jobs:
             fi
           }
           trap cleanup EXIT
-
           Xvfb :99 -screen 0 1280x720x24 -nolisten tcp >xvfb.log 2>&1 &
           XVFB_PID=$!
           sleep 2
           xdotool getdisplaygeometry
-
           "$SHADPS4_BIN" --config-clean --fullscreen true \
-            "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.elf" \
+            "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.oelf" \
             >shadps4-stdout.log 2>&1 &
           SHAD_PID=$!
-
           found=0
           for _ in $(seq 1 30); do
             if test -s user/data/suyu-orbis-render-probe.json; then
@@ -167,7 +169,6 @@ jobs:
             fi
             sleep 1
           done
-
           echo '--- launcher stdout/stderr ---'
           cat shadps4-stdout.log || true
           echo '--- shadPS4 logs ---'
@@ -176,7 +177,6 @@ jobs:
           done
           echo '--- user files ---'
           find user -maxdepth 3 -type f -print
-
           if test "$found" -ne 1; then
             echo 'Guest render marker was not created; collecting a short syscall trace.'
             kill "$SHAD_PID" 2>/dev/null || true
@@ -185,15 +185,12 @@ jobs:
             rm -f trace.*
             timeout --kill-after=2s 8s strace -ff -tt -s 256 -o trace \
               "$SHADPS4_BIN" --config-clean --fullscreen true \
-              "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.elf" \
+              "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.oelf" \
               >trace-stdout.log 2>&1 || true
-            echo '--- trace launcher output ---'
             cat trace-stdout.log || true
-            echo '--- final syscalls ---'
             tail -n 120 trace.* || true
             exit 1
           fi
-
           cat user/data/suyu-orbis-render-probe.json
           python3 - <<'PY'
           import json
@@ -203,22 +200,45 @@ jobs:
           assert data['stage'] == 'frame_submitted', data
           assert data['width'] == 1280 and data['height'] == 720, data
           PY
-
-          # Give the presenter another moment, then capture the entire 1280x720 Xvfb root.
           sleep 2
           ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size 1280x720 \
             -i :99 -frames:v 1 render-probe.png
-          test -s render-probe.png
-
+          sleep 1
+          ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size 1280x720 \
+            -i :99 -frames:v 1 render-probe-second.png
           python3 - <<'PY'
+          import json
+          from pathlib import Path
           from PIL import Image
-          im = Image.open('render-probe.png').convert('RGB')
-          assert im.size == (1280, 720), im.size
-          colors = {im.getpixel((x, y)) for y in range(32, 720, 64) for x in range(32, 1280, 64)}
-          print('captured distinct sampled colors:', len(colors), sorted(colors)[:20])
-          assert len(colors) >= 6, colors
+          bars = [(255,255,255), (255,255,0), (0,255,255), (0,255,0),
+                  (255,0,255), (255,0,0), (0,0,255), (16,16,16)]
+          results = []
+          for filename in ('render-probe.png', 'render-probe-second.png'):
+              im = Image.open(filename).convert('RGB')
+              assert im.size == (1280, 720), im.size
+              checks = 0
+              for y in (96, 608):
+                  for i, expected in enumerate(bars):
+                      actual = im.getpixel((80 + i*160, y))
+                      if i == 7:
+                          assert max(actual) <= 96, (filename, i, actual)
+                      else:
+                          assert all(abs(a-b) <= 16 for a,b in zip(actual, expected)), (filename, i, actual, expected)
+                      checks += 1
+              for row in range(9):
+                  for col in range(12):
+                      actual = im.getpixel((464 + col*32, 232 + row*32))
+                      light = (col ^ row) & 1
+                      assert max(actual)-min(actual) <= 8, (filename, 'checker channels', actual)
+                      assert (min(actual) >= 220 if light else max(actual) <= 96), (filename, 'checker', col, row, actual)
+                      checks += 1
+              for xy in ((4,4), (640,4), (1275,360), (4,360), (640,715)):
+                  assert min(im.getpixel(xy)) >= 240, (filename, 'border', xy, im.getpixel(xy))
+                  checks += 1
+              results.append({'file': filename, 'size': list(im.size), 'pattern_checks': checks, 'passed': True})
+          Path('capture-validation.json').write_text(json.dumps(results, indent=2)+'\n')
+          print(json.dumps(results, indent=2))
           PY
-
           cp render-probe.png "$GITHUB_WORKSPACE/render-probe.png"
           cp user/data/suyu-orbis-render-probe.json "$GITHUB_WORKSPACE/render-probe.json"
 
@@ -240,4 +260,5 @@ jobs:
             render-probe.json
             ${{ runner.temp }}/shadps4-render/
             build/orbis/suyu-orbis-render-probe.elf
+            build/orbis/suyu-orbis-render-probe.oelf
           if-no-files-found: warn
