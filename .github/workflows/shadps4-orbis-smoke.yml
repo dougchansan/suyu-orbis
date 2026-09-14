@@ -119,14 +119,23 @@ jobs:
           mkdir -p "$EMU_DIR/user/data"
           cd "$EMU_DIR"
           set +e
-          timeout 60s xvfb-run -a "$SHADPS4_BIN" \
+          timeout 20s xvfb-run -a "$SHADPS4_BIN" \
             "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-probe.elf" \
             > probe-shadps4.log 2>&1
           RC=$?
           set -e
           echo "shadPS4 packaging: $SHADPS4_PACKAGING"
           echo "shadPS4 exit code: $RC"
-          cat probe-shadps4.log
+          echo '--- launcher stdout/stderr ---'
+          cat probe-shadps4.log || true
+          echo '--- shadPS4 internal logs ---'
+          for f in user/log/*.log; do
+            if test -f "$f"; then
+              echo "### $f"
+              cat "$f"
+            fi
+          done
+          echo '--- portable user files ---'
           find user -maxdepth 3 -type f -print
           test -s user/data/suyu-orbis-probe.json
           python3 - <<'PY'
@@ -148,13 +157,21 @@ jobs:
           cd "$EMU_DIR"
           rm -f user/data/suyu-orbis-upstream-smoke.json
           set +e
-          timeout 60s xvfb-run -a "$SHADPS4_BIN" \
+          timeout 20s xvfb-run -a "$SHADPS4_BIN" \
             "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-upstream-smoke.elf" \
             > upstream-shadps4.log 2>&1
           RC=$?
           set -e
           echo "shadPS4 exit code: $RC"
-          cat upstream-shadps4.log
+          echo '--- launcher stdout/stderr ---'
+          cat upstream-shadps4.log || true
+          echo '--- shadPS4 internal logs ---'
+          for f in user/log/*.log; do
+            if test -f "$f"; then
+              echo "### $f"
+              cat "$f"
+            fi
+          done
           find user -maxdepth 3 -type f -print
           test -s user/data/suyu-orbis-upstream-smoke.json
           python3 - <<'PY'
