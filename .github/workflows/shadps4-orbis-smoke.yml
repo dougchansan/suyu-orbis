@@ -1,0 +1,175 @@
+name: shadPS4 OpenOrbis smoke
+
+on:
+  push:
+    branches: [full-core-linux-smoke]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shadps4-orbis-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shadps4-orbis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SHADPS4_VERSION: "0.18.0"
+      SHADPS4_SHA256: "3cf0f669c089411775a2434a41ca9c391fb7d24c1a1521ee45dd1d36f390c4a4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: dougchansan/suyu-v0.0.4
+          ref: e6f53df9f160903fd15ed2b0cd91ac60f1f43428
+          path: vendor/suyu
+          sparse-checkout: src/core/recompiler/arm64_to_c.h
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Install build and shadPS4 runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 llvm-18 ninja-build unzip curl ca-certificates \
+            xvfb xauth vulkan-tools mesa-vulkan-drivers libvulkan1 libfuse2 \
+            libx11-6 libxext6 libwayland-client0 libdecor-0-0 libxkbcommon0 \
+            libglfw3 libgles2 libasound2t64 libpulse0 libopenal1 libudev1 \
+            libxcursor1 libxi6 libxss1 libxtst6 libxrandr2 libxfixes3
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+
+      - name: Export original synthetic AArch64 with pinned Suyu
+        run: python3 scripts/test_upstream.py --cxx clang++
+
+      - name: Install public OpenOrbis release SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/toolchain-llvm-18.2.zip \
+            -o "$RUNNER_TEMP/openorbis.zip"
+          echo "5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f  $RUNNER_TEMP/openorbis.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/openorbis.zip" -d "$RUNNER_TEMP/openorbis"
+          mapfile -t ARCHIVE < <(find "$RUNNER_TEMP/openorbis" -name 'toolchain-llvm-*.tar.gz' -type f)
+          test "${#ARCHIVE[@]}" -eq 1
+          tar -xzf "${ARCHIVE[0]}" -C "$RUNNER_TEMP/openorbis"
+          mapfile -t CRT < <(find "$RUNNER_TEMP/openorbis" -path '*/lib/crt1.o' -type f)
+          test "${#CRT[@]}" -eq 1
+          SDK="${CRT[0]%/lib/crt1.o}"
+          chmod +x "$SDK/bin/linux/create-fself"
+          echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
+
+      - name: Build both PS4 diagnostics
+        run: |
+          python3 scripts/build_orbis.py
+          python3 scripts/build_orbis.py --fixture-bundle build/upstream-fixture/bundle
+          test -s build/orbis/suyu-orbis-probe.elf
+          test -s build/orbis/suyu-orbis-upstream-smoke.elf
+          file build/orbis/*.elf
+
+      - name: Download pinned official shadPS4 SDL release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/shadps4"
+          curl --fail --location --retry 3 \
+            "https://github.com/shadps4-emu/shadPS4/releases/download/v.${SHADPS4_VERSION}/shadps4-linux-sdl-${SHADPS4_VERSION}.zip" \
+            -o "$RUNNER_TEMP/shadps4.zip"
+          echo "${SHADPS4_SHA256}  $RUNNER_TEMP/shadps4.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/shadps4.zip" -d "$RUNNER_TEMP/shadps4"
+          mapfile -t EXES < <(find "$RUNNER_TEMP/shadps4" -maxdepth 2 -type f -name shadps4)
+          printf 'shadPS4 candidates: %s\n' "${EXES[@]}"
+          test "${#EXES[@]}" -eq 1
+          chmod +x "${EXES[0]}"
+          echo "SHADPS4_BIN=${EXES[0]}" >> "$GITHUB_ENV"
+          ldd "${EXES[0]}" | tee "$RUNNER_TEMP/shadps4-ldd.txt"
+          ! grep -q 'not found' "$RUNNER_TEMP/shadps4-ldd.txt"
+
+      - name: Select Mesa software Vulkan
+        shell: bash
+        run: |
+          set -euo pipefail
+          LVP="$(find /usr/share/vulkan/icd.d -type f -name 'lvp_icd*.json' | head -n 1)"
+          test -n "$LVP"
+          echo "VK_ICD_FILENAMES=$LVP" >> "$GITHUB_ENV"
+          VK_ICD_FILENAMES="$LVP" vulkaninfo --summary | head -n 120
+
+      - name: Boot hand-authored PS4 diagnostic in shadPS4
+        shell: bash
+        run: |
+          set -euo pipefail
+          EMU_DIR="$RUNNER_TEMP/shadps4-run"
+          mkdir -p "$EMU_DIR/user/data"
+          cd "$EMU_DIR"
+          set +e
+          timeout 60s xvfb-run -a "$SHADPS4_BIN" \
+            "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-probe.elf" \
+            > probe-shadps4.log 2>&1
+          RC=$?
+          set -e
+          echo "shadPS4 exit code: $RC"
+          cat probe-shadps4.log
+          find user -maxdepth 3 -type f -print
+          test -s user/data/suyu-orbis-probe.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('user/data/suyu-orbis-probe.json')
+          data = json.loads(p.read_text())
+          print(json.dumps(data, indent=2))
+          assert data['passed'] is True
+          assert data['x0'] == 42
+          assert data['jit_fallback'] is False
+          PY
+
+      - name: Boot real-exporter PS4 diagnostic in shadPS4
+        shell: bash
+        run: |
+          set -euo pipefail
+          EMU_DIR="$RUNNER_TEMP/shadps4-run"
+          cd "$EMU_DIR"
+          rm -f user/data/suyu-orbis-upstream-smoke.json
+          set +e
+          timeout 60s xvfb-run -a "$SHADPS4_BIN" \
+            "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-upstream-smoke.elf" \
+            > upstream-shadps4.log 2>&1
+          RC=$?
+          set -e
+          echo "shadPS4 exit code: $RC"
+          cat upstream-shadps4.log
+          find user -maxdepth 3 -type f -print
+          test -s user/data/suyu-orbis-upstream-smoke.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('user/data/suyu-orbis-upstream-smoke.json')
+          data = json.loads(p.read_text())
+          print(json.dumps(data, indent=2))
+          assert data['passed'] is True
+          assert data['jit_fallback'] is False
+          PY
+
+      - name: Record emulator evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## shadPS4 OpenOrbis smoke'
+            echo
+            echo '- Emulator: official shadPS4 SDL v0.18.0'
+            echo '- GPU: Mesa lavapipe software Vulkan on Xvfb'
+            echo '- Inputs: OpenOrbis PS4 ELFs built in this job'
+            echo
+            for f in "$RUNNER_TEMP/shadps4-run/user/data/suyu-orbis-probe.json" \
+                     "$RUNNER_TEMP/shadps4-run/user/data/suyu-orbis-upstream-smoke.json"; do
+              if test -s "$f"; then
+                echo '```json'
+                cat "$f"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
