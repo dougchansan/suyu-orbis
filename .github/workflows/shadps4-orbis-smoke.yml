@@ -105,7 +105,8 @@ jobs:
           libc.mmap.restype = ctypes.c_void_p
           libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
           libc.munmap.restype = ctypes.c_int
-          size = 8 * 1024 * 1024
+          # Only test the zero page: the host Python binary may occupy 0x400000.
+          size = os.sysconf('SC_PAGE_SIZE')
           # MAP_FIXED_NOREPLACE avoids replacing an existing process mapping.
           result = libc.mmap(None, size, 0, 0x100000 | 0x02 | 0x20, -1, 0)
           if result == ctypes.c_void_p(-1).value:
@@ -117,7 +118,7 @@ jobs:
           if libc.munmap(None, size) != 0:
               error = ctypes.get_errno()
               raise OSError(error, os.strerror(error))
-          print('Unprivileged low-address mmap preflight passed (8 MiB at zero).')
+          print('Unprivileged low-address mmap preflight passed (one page at zero).')
           PY
 
       - name: Render PS4 framebuffer in shadPS4 and capture it
