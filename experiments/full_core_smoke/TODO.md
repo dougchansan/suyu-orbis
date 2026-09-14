@@ -1,0 +1,5 @@
+- [ ] Configure full pinned Suyu with SUYU_NO_JIT=ON
+- [ ] Build core target
+- [ ] Compile bridge against real core
+- [ ] Link synthetic AOT bundle
+- [ ] Execute real ArmRecomp through SVC/HLE/resume or record first truthful blocker
