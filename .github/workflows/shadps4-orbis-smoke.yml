@@ -85,6 +85,41 @@ jobs:
           echo "VK_ICD_FILENAMES=$LVP" >> "$GITHUB_ENV"
           VK_ICD_FILENAMES="$LVP" vulkaninfo --summary | grep -E 'deviceName|driverName|apiVersion' | head -n 20
 
+      - name: Permit guest low-address reservations on disposable runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/shadps4-render"
+          original=$(sysctl -n vm.mmap_min_addr)
+          echo "SHADPS4_MMAP_MIN_ADDR_ORIGINAL=$original" >> "$GITHUB_ENV"
+          printf 'Original vm.mmap_min_addr=%s\n' "$original" | tee "$RUNNER_TEMP/shadps4-render/mmap-policy.txt"
+          # shadPS4 reserves low guest addresses, including zero. This exception
+          # is limited to the disposable hosted VM; the emulator is NOT root.
+          sudo sysctl -w vm.mmap_min_addr=0 | tee -a "$RUNNER_TEMP/shadps4-render/mmap-policy.txt"
+          python3 - <<'PY'
+          import ctypes
+          import os
+          libc = ctypes.CDLL(None, use_errno=True)
+          libc.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_long]
+          libc.mmap.restype = ctypes.c_void_p
+          libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+          libc.munmap.restype = ctypes.c_int
+          size = 8 * 1024 * 1024
+          # MAP_FIXED_NOREPLACE avoids replacing an existing process mapping.
+          result = libc.mmap(None, size, 0, 0x100000 | 0x02 | 0x20, -1, 0)
+          if result == ctypes.c_void_p(-1).value:
+              error = ctypes.get_errno()
+              raise OSError(error, os.strerror(error))
+          if result is not None:
+              libc.munmap(result, size)
+              raise RuntimeError(f'Expected address zero; received {result:#x}')
+          if libc.munmap(None, size) != 0:
+              error = ctypes.get_errno()
+              raise OSError(error, os.strerror(error))
+          print('Unprivileged low-address mmap preflight passed (8 MiB at zero).')
+          PY
+
       - name: Render PS4 framebuffer in shadPS4 and capture it
         shell: bash
         run: |
@@ -147,7 +182,7 @@ jobs:
             wait "$SHAD_PID" 2>/dev/null || true
             SHAD_PID=""
             rm -f trace.*
-            timeout 8s strace -ff -tt -s 256 -o trace \
+            timeout --kill-after=2s 8s strace -ff -tt -s 256 -o trace \
               "$SHADPS4_BIN" --config-clean --fullscreen true \
               "$GITHUB_WORKSPACE/build/orbis/suyu-orbis-render-probe.elf" \
               >trace-stdout.log 2>&1 || true
@@ -186,6 +221,14 @@ jobs:
           cp render-probe.png "$GITHUB_WORKSPACE/render-probe.png"
           cp user/data/suyu-orbis-render-probe.json "$GITHUB_WORKSPACE/render-probe.json"
 
+      - name: Restore runner low-address mapping policy
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${SHADPS4_MMAP_MIN_ADDR_ORIGINAL:-}" ]; then
+            sudo sysctl -w "vm.mmap_min_addr=$SHADPS4_MMAP_MIN_ADDR_ORIGINAL"
+          fi
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -194,4 +237,6 @@ jobs:
           path: |
             render-probe.png
             render-probe.json
+            ${{ runner.temp }}/shadps4-render/
+            build/orbis/suyu-orbis-render-probe.elf
           if-no-files-found: warn
