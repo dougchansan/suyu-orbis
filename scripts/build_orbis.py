@@ -41,7 +41,8 @@ def main() -> int:
         # Remove only this script's prior conversion output: a failed converter
         # must not make a stale eboot appear to be the newly built executable.
         eboot.unlink(missing_ok=True)
-        run(str(sdk/'bin'/host/'create-fself'), '-in='+str(elf),
+        converter = 'create-fself-macos' if host == 'macos' else 'create-fself'
+        run(str(sdk/'bin'/host/converter), '-in='+str(elf),
             '-out='+str(out/(target+'.oelf')), '--eboot', str(eboot),
             '--paid', '0x3800000000000011')
         if not eboot.is_file() or eboot.stat().st_size == 0:

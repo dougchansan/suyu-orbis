@@ -36,7 +36,8 @@ def inspect(orbis: bool, sdk: str | None = None) -> dict:
             if not host:
                 missing.append('Linux/WSL or macOS OpenOrbis build host')
             else:
-                fself = root/'bin'/host/'create-fself'
+                converter = 'create-fself-macos' if host == 'macos' else 'create-fself'
+                fself = root/'bin'/host/converter
                 files['create-fself'] = fself.is_file() and os.access(fself, os.X_OK)
                 if not files['create-fself']: missing.append(str(fself))
     return {'mode': 'orbis' if orbis else 'host', 'ready': not missing,
