@@ -2,11 +2,11 @@
 
 Each milestone needs its own recorded evidence. Do not skip a failing stage by weakening its test.
 
-| Stage | Acceptance criterion | Initial state |
+| Stage | Acceptance criterion | Verified state |
 |---|---|---|
-| Host registry | Relocation, typed dispatch, failures, multi-module link, sanitizers | Implemented; local tests pass |
-| Actual emitter | Original AArch64 -> Suyu C -> native host; memory store and SVC yield | Test implemented; requires pinned header checkout |
-| OpenOrbis cross-build | SDK-backed ELF, symbol audit, nonempty eboot, hashes | Build path and CI configured; SDK required |
+| Host registry | Relocation, typed dispatch, failures, multi-module link, sanitizers | Local and GCC/Clang CI tests pass |
+| Actual emitter | Original AArch64 -> Suyu C -> native host; memory store and SVC yield | Passed in CI run 34817696559 |
+| OpenOrbis cross-build | SDK-backed ELF, symbol audit, nonempty eboot, hashes | Both diagnostics passed through eboot conversion in CI run 34817696559 |
 | Device diagnostic | Retrieve successful JSON report from real PS4, record device/firmware | Not tested |
 | Actual Suyu core | Port dependencies/platform services, build SUYU_NO_JIT core on Orbis | Not implemented |
 | Loader + AOT | Attach real hooks, bind real module bases, reach SVC on PS4 | Bridge source supplied; not integrated |
@@ -18,7 +18,7 @@ Each milestone needs its own recorded evidence. Do not skip a failing stage by w
 
 ## Next engineering work
 
-First run the actual-emitter test and fix genuine incompatibilities. Then cross-compile both diagnostics and run the smaller registry probe on a PS4 before attempting the emitted-runtime diagnostic. Record the hardware logs; a shadPS4 run, if used, is separate emulator evidence rather than hardware evidence.
+The actual-emitter host test and both OpenOrbis cross-builds pass. Next reproduce the build locally and run the smaller registry probe on a PS4 before attempting the emitted-runtime diagnostic. Record the hardware logs; a shadPS4 run, if used, is separate emulator evidence rather than hardware evidence.
 
 For the real-core port, maintain a patch series against the locked source in a separate worktree. Start by inventorying platform/dependency blockers: C++20 library coverage, fibers/context switching, host virtual memory layout, mapping/protection semantics, signal handling, clocks, thread-local storage, atomics, and all linked libraries. Avoid propagating the host's `-march=native` flags onto the Jaguar target.
 

@@ -13,6 +13,12 @@ This is an early port foundation, **not a working Switch emulator or Mario Kart 
 - An opt-in bridge to the real `Core::SetRecompLookup` / `Core::SetRecompBaseSetter` hooks. Full-core integration is not yet built or validated.
 - Host tests, sanitizer configuration, no-JIT symbol guardrail, real-emitter synthetic test, and CI cross-build configuration.
 
+## Verified build status
+
+[CI run 34817696559](https://github.com/dougchansan/suyu-orbis/actions/runs/34817696559), code revision `3530e5394fcef18bb4752397ade7be3e8baa16f5`, passed the GCC and Clang host jobs, Clang ASan/UBSan, the actual Suyu-emitter synthetic integration, and OpenOrbis cross-builds of **both diagnostics through nonempty `eboot.bin` output**. ELF/eboot hashes are recorded in [the validation ledger](docs/VALIDATION.md).
+
+**No physical PS4 execution, full Suyu HLE, graphics, or game boot has been validated.** CI produces build evidence, not a playable release, and does not upload the binaries.
+
 ## Start on a host
 
 Requirements: a C11 compiler, CMake 3.24+, Ninja, and Python 3.10+. The optional exporter integration needs a C++20 compiler. Linux/WSL is the initial reference build environment.
@@ -49,7 +55,7 @@ The pinned emitter is `dougchansan/suyu-v0.0.4` at `e6f53df9f160903fd15ed2b0cd91
 
 ## Build the PS4 diagnostic
 
-Install the public [OpenOrbis toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), including its libraries, CRT, linker script, and host conversion tools. A source checkout containing only headers is insufficient. The CI reference is the official v0.5.3 `toolchain-llvm-18.2.zip` release with host LLVM 18 tools.
+Install the public [OpenOrbis toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), including its libraries, CRT, linker script, and host conversion tools. A source checkout containing only headers is insufficient. The CI reference is the official v0.5.3 `toolchain-llvm-18.2.zip` release with host LLVM 18 tools. The release ZIP contains a tarball; extract both layers.
 
 ```sh
 export OO_PS4_TOOLCHAIN=/absolute/path/to/OpenOrbis/PS4Toolchain
