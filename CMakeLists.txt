@@ -9,6 +9,7 @@ option(SO_BUILD_UPSTREAM_FIXTURE "Test an imported SYNTHETIC upstream fixture" O
 set(SO_MODULE_BUNDLE "" CACHE PATH "Directory written by import_modules.py")
 if(SO_PLATFORM_ORBIS)
     set(SO_BUILD_TESTS OFF)
+    enable_language(CXX)
 endif()
 if(SO_SANITIZE)
     if(SO_PLATFORM_ORBIS OR MSVC)
@@ -32,6 +33,14 @@ target_link_libraries(suyu-orbis-probe PRIVATE so_fixture)
 if(SO_PLATFORM_ORBIS)
     target_compile_definitions(suyu-orbis-probe PRIVATE SO_PLATFORM_ORBIS=1)
     set_target_properties(suyu-orbis-probe PROPERTIES SUFFIX ".elf")
+
+    # Small graphics gate independent of Suyu: CPU-write two linear display
+    # buffers and present them through the real PS4 SceVideoOut ABI.
+    add_executable(suyu-orbis-render-probe experiments/orbis_render_probe/render_probe.cpp)
+    target_compile_features(suyu-orbis-render-probe PRIVATE cxx_std_17)
+    target_compile_options(suyu-orbis-render-probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(suyu-orbis-render-probe PRIVATE SceVideoOut)
+    set_target_properties(suyu-orbis-render-probe PROPERTIES SUFFIX ".elf")
 endif()
 if(SO_MODULE_BUNDLE)
     if(NOT EXISTS "${SO_MODULE_BUNDLE}/CMakeLists.txt")
