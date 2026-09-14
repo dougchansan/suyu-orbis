@@ -19,6 +19,7 @@ jobs:
     env:
       SHADPS4_VERSION: "0.18.0"
       SHADPS4_SHA256: "3cf0f669c089411775a2434a41ca9c391fb7d24c1a1521ee45dd1d36f390c4a4"
+      APPIMAGE_EXTRACT_AND_RUN: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -81,13 +82,25 @@ jobs:
             -o "$RUNNER_TEMP/shadps4.zip"
           echo "${SHADPS4_SHA256}  $RUNNER_TEMP/shadps4.zip" | sha256sum --check
           unzip -q "$RUNNER_TEMP/shadps4.zip" -d "$RUNNER_TEMP/shadps4"
-          mapfile -t EXES < <(find "$RUNNER_TEMP/shadps4" -maxdepth 2 -type f -name shadps4)
-          printf 'shadPS4 candidates: %s\n' "${EXES[@]}"
-          test "${#EXES[@]}" -eq 1
-          chmod +x "${EXES[0]}"
-          echo "SHADPS4_BIN=${EXES[0]}" >> "$GITHUB_ENV"
-          ldd "${EXES[0]}" | tee "$RUNNER_TEMP/shadps4-ldd.txt"
-          ! grep -q 'not found' "$RUNNER_TEMP/shadps4-ldd.txt"
+          echo 'shadPS4 release contents:'
+          find "$RUNNER_TEMP/shadps4" -maxdepth 3 -type f -print
+
+          mapfile -t APPS < <(find "$RUNNER_TEMP/shadps4" -maxdepth 3 -type f -iname '*.appimage')
+          if test "${#APPS[@]}" -eq 1; then
+            chmod +x "${APPS[0]}"
+            echo "SHADPS4_BIN=${APPS[0]}" >> "$GITHUB_ENV"
+            echo "SHADPS4_PACKAGING=appimage" >> "$GITHUB_ENV"
+            "${APPS[0]}" --appimage-version || true
+          else
+            mapfile -t EXES < <(find "$RUNNER_TEMP/shadps4" -maxdepth 3 -type f \( -iname shadps4 -o -iname 'shadPS4' \))
+            printf 'shadPS4 candidates: %s\n' "${EXES[@]}"
+            test "${#EXES[@]}" -eq 1
+            chmod +x "${EXES[0]}"
+            echo "SHADPS4_BIN=${EXES[0]}" >> "$GITHUB_ENV"
+            echo "SHADPS4_PACKAGING=elf" >> "$GITHUB_ENV"
+            ldd "${EXES[0]}" | tee "$RUNNER_TEMP/shadps4-ldd.txt"
+            ! grep -q 'not found' "$RUNNER_TEMP/shadps4-ldd.txt"
+          fi
 
       - name: Select Mesa software Vulkan
         shell: bash
@@ -111,6 +124,7 @@ jobs:
             > probe-shadps4.log 2>&1
           RC=$?
           set -e
+          echo "shadPS4 packaging: $SHADPS4_PACKAGING"
           echo "shadPS4 exit code: $RC"
           cat probe-shadps4.log
           find user -maxdepth 3 -type f -print
