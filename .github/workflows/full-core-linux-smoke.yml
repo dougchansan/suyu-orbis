@@ -91,7 +91,7 @@ jobs:
             -DENABLE_OPENGL=OFF \
             -DUSE_DISCORD_PRESENCE=OFF \
             -DYUZU_TESTS=OFF \
-            -DYUZU_DOWNLOAD_TIME_ZONE_DATA=OFF \
+            -DYUZU_DOWNLOAD_TIME_ZONE_DATA=ON \
             -DYUZU_DISABLE_LLVM=ON \
             -Dfmt_FORCE_BUNDLED=ON \
             -DYUZU_BUILD_PRESET=generic \
