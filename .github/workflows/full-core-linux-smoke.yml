@@ -1,0 +1,144 @@
+name: Full Suyu no-JIT Linux smoke
+
+on:
+  push:
+    branches: [full-core-linux-smoke]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout suyu-orbis experiment
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned Suyu source
+        uses: actions/checkout@v4
+        with:
+          repository: dougchansan/suyu-v0.0.4
+          ref: e6f53df9f160903fd15ed2b0cd91ac60f1f43428
+          path: upstream-suyu
+          submodules: recursive
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config ninja-build nasm autoconf curl ca-certificates \
+            glslang-tools \
+            libboost-dev libboost-filesystem-dev libboost-context-dev \
+            libusb-1.0-0-dev libssl-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
+            libswscale-dev libswresample-dev \
+            libzstd-dev liblz4-dev libgl1-mesa-dev \
+            libasound2-dev libpulse-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxkbcommon-dev libxss-dev libxtst-dev \
+            libwayland-dev libwayland-egl1 wayland-protocols libdecor-0-dev \
+            libegl-dev libdrm-dev libgbm-dev libvulkan-dev
+
+      - name: Install CMake 3.31.6
+        run: |
+          curl --fail --location --retry 3 -o /tmp/cmake.tar.gz \
+            https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz
+          sudo mkdir -p /opt/cmake
+          sudo tar xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+          echo /opt/cmake/bin >> "$GITHUB_PATH"
+
+      - name: Emit original AArch64 fixture with real Suyu exporter
+        run: |
+          set -euo pipefail
+          mkdir -p build/full-core-fixture
+          c++ -std=c++20 -O1 \
+            -I "$GITHUB_WORKSPACE/upstream-suyu/src/core/recompiler" \
+            experiments/full_core_smoke/upstream_fixture.cpp \
+            -o build/full-core-fixture/emit-fixture
+          ./build/full-core-fixture/emit-fixture build/full-core-fixture/exefs
+          python3 scripts/import_modules.py \
+            --exefs build/full-core-fixture/exefs \
+            --output build/full-core-fixture/bundle
+
+      - name: Inject experiment target into pinned Suyu build
+        run: |
+          cat >> upstream-suyu/CMakeLists.txt <<EOF
+          include("$GITHUB_WORKSPACE/experiments/full_core_smoke/suyu_integration.cmake")
+          EOF
+          tail -n 4 upstream-suyu/CMakeLists.txt
+
+      - name: Configure real Suyu core without Dynarmic
+        run: |
+          cmake --version
+          cmake -S upstream-suyu -B build/full-suyu -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUYU_NO_JIT=ON \
+            -DENABLE_QT=OFF \
+            -DYUZU_CMD=OFF \
+            -DYUZU_ROOM=OFF \
+            -DYUZU_ROOM_STANDALONE=OFF \
+            -DENABLE_CUBEB=OFF \
+            -DENABLE_WEB_SERVICE=OFF \
+            -DENABLE_UPDATE_CHECKER=OFF \
+            -DENABLE_LIBUSB=OFF \
+            -DENABLE_OPENGL=OFF \
+            -DUSE_DISCORD_PRESENCE=OFF \
+            -DYUZU_TESTS=OFF \
+            -DYUZU_DOWNLOAD_TIME_ZONE_DATA=OFF \
+            -DYUZU_DISABLE_LLVM=ON \
+            -Dfmt_FORCE_BUNDLED=ON \
+            -DYUZU_BUILD_PRESET=generic \
+            -DSO_FULL_CORE_BUNDLE="$GITHUB_WORKSPACE/build/full-core-fixture/bundle"
+
+      - name: Build real core, bridge, generated modules, and smoke executable
+        run: |
+          cmake --build build/full-suyu \
+            --target core suyu_orbis_bridge so_module_bundle suyu_orbis_full_core_smoke \
+            --parallel 2
+
+      - name: Prove no Dynarmic/JIT symbols are linked
+        run: |
+          BIN=build/full-suyu/bin/suyu_orbis_full_core_smoke
+          test -x "$BIN"
+          python3 scripts/audit_binary.py "$BIN"
+          if nm -C "$BIN" | grep -E 'Dynarmic::|ArmDynarmic'; then
+            echo 'Dynarmic symbol unexpectedly present in no-JIT smoke binary' >&2
+            exit 1
+          fi
+
+      - name: Execute real ArmRecomp to real HLE and resume
+        env:
+          SUYU_RECOMP_STRICT: '1'
+        run: |
+          set -o pipefail
+          build/full-suyu/bin/suyu_orbis_full_core_smoke | tee build/full-core-smoke.json
+          grep -q '"passed":true' build/full-core-smoke.json
+          grep -q '"svc":30' build/full-core-smoke.json
+          grep -q '"jit_available":false' build/full-core-smoke.json
+
+      - name: Evidence summary
+        if: always()
+        run: |
+          {
+            echo '## Full-core Linux smoke'
+            echo
+            echo '- Suyu: `e6f53df9f160903fd15ed2b0cd91ac60f1f43428`'
+            echo '- Configuration: `SUYU_NO_JIT=ON`'
+            echo '- Fixture: original synthetic AArch64, exported by pinned Suyu'
+            echo '- SVC target: `0x1E GetSystemTick` real HLE implementation'
+            echo
+            if test -f build/full-core-smoke.json; then
+              echo '```json'
+              cat build/full-core-smoke.json
+              echo '```'
+            else
+              echo 'Smoke executable did not reach its JSON result; inspect the failing build/run step.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
