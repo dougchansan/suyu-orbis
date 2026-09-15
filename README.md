@@ -6,6 +6,12 @@ Original AArch64 code now runs through the real Suyu static exporter, compiles t
 
 **This is not yet a working Switch emulator or Mario Kart 8 Deluxe port.** The tested native executor is a small generated-code runtime, not the complete Horizon HLE or Maxwell GPU renderer. No physical PS4 execution has been validated.
 
+## Continue the native title port
+
+**Local agents: start with [the persistent handoff](docs/LOCAL_AGENT_HANDOFF.md) and [the current port-progress ledger](docs/PORT_PROGRESS.md).** [AGENTS.md](AGENTS.md) points to both.
+
+The next task is the real Suyu no-JIT core, not another synthetic display demo. The complete Linux core configuration passed, but [run 34916507480](https://github.com/dougchansan/suyu-orbis/actions/runs/34916507480) failed the combined build. Reproduce and repair that failure, execute the limited full-core smoke, then add normal process/thread SVC dispatch before moving the real core to Orbis. The native success below is independent evidence and does not mark that full-core gate as passed.
+
 ## Verified native milestone
 
 [CI run 34916702772](https://github.com/dougchansan/suyu-orbis/actions/runs/34916702772), tested code revision `25874425ad97238853b245667aa33ca7b51e2c2d`:
@@ -101,7 +107,7 @@ This builds libraries, **not a standalone game application**. The native display
 
 The complete Suyu runtime still needs Orbis platform integration for virtual memory, process/thread scheduling, exclusives, timing, filesystem, services, audio, input, and saves. The present native backend displays CPU-written images; it does not implement Switch GPU commands or shaders. [OpenGNM](https://github.com/PS4-OpenGNM/opengnm-stack) remains a graphics candidate requiring a feature/behavior audit and independent GPU tests.
 
-Read [native status](docs/NATIVE_ORBIS.md), [source audit](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md), and [agent instructions](AGENTS.md). Earlier documents retain historical baseline evidence; the native guide records the newer verified milestone.
+Read [native status](docs/NATIVE_ORBIS.md), [source audit](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md), and [agent instructions](AGENTS.md). Earlier documents retain historical baseline evidence; the native guide records the newer verified milestone. [PORT_PROGRESS.md](docs/PORT_PROGRESS.md) and [LOCAL_AGENT_HANDOFF.md](docs/LOCAL_AGENT_HANDOFF.md) identify the next implementation gates and their acceptance tests.
 
 ## License and inputs
 
