@@ -3,6 +3,13 @@ name: Full Suyu no-JIT Linux smoke
 on:
   push:
     branches: [full-core-linux-smoke]
+    paths:
+      - '.github/workflows/full-core-linux-smoke.yml'
+      - 'experiments/full_core_smoke/**'
+      - 'integrations/**'
+      - 'include/suyu_orbis/**'
+      - 'src/registry.c'
+      - 'scripts/import_modules.py'
   workflow_dispatch:
 
 permissions:
@@ -15,6 +22,7 @@ concurrency:
 jobs:
   full-core:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - name: Checkout suyu-orbis experiment
         uses: actions/checkout@v4
@@ -77,9 +85,14 @@ jobs:
       - name: Configure real Suyu core without Dynarmic
         run: |
           cmake --version
+          # DYNARMIC_TESTS defaults from BUILD_TESTING before externals disables
+          # it. Explicitly exclude unrelated JIT tests/Oaknut examples, including
+          # the C++23 <print> example which failed on GCC 13's standard library.
           cmake -S upstream-suyu -B build/full-suyu -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
             -DSUYU_NO_JIT=ON \
+            -DBUILD_TESTING=OFF \
+            -DDYNARMIC_TESTS=OFF \
             -DENABLE_QT=OFF \
             -DYUZU_CMD=OFF \
             -DYUZU_ROOM=OFF \
@@ -99,9 +112,10 @@ jobs:
 
       - name: Build real core, bridge, generated modules, and smoke executable
         run: |
+          set -o pipefail
           cmake --build build/full-suyu \
             --target core suyu_orbis_bridge so_module_bundle suyu_orbis_full_core_smoke \
-            --parallel 2
+            --parallel 2 2>&1 | tee build/full-core-build.log
 
       - name: Prove no Dynarmic/JIT symbols are linked
         run: |
@@ -133,6 +147,7 @@ jobs:
             echo '- Configuration: `SUYU_NO_JIT=ON`'
             echo '- Fixture: original synthetic AArch64, exported by pinned Suyu'
             echo '- SVC target: `0x1E GetSystemTick` real HLE implementation'
+            echo '- Synthetic context restore, not a production process/scheduler test'
             echo
             if test -f build/full-core-smoke.json; then
               echo '```json'
@@ -142,3 +157,13 @@ jobs:
               echo 'Smoke executable did not reach its JSON result; inspect the failing build/run step.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve compile and execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-core-linux-${{ github.sha }}
+          path: |
+            build/full-core-build.log
+            build/full-core-smoke.json
+          if-no-files-found: warn
+          retention-days: 14
