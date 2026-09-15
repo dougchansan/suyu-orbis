@@ -1,78 +1,90 @@
 # suyu-orbis
 
-**A PS4/OpenOrbis bring-up project for Suyu's statically recompiled AArch64 code.**
+**Native PS4/OpenOrbis bring-up for Suyu's statically recompiled AArch64 code.**
 
-This is an early port foundation, **not a working Switch emulator or Mario Kart 8 Deluxe port**. The default executable is an explicitly labelled, hand-authored static-dispatch diagnostic. A separate integration test runs original synthetic AArch64 instructions through the actual pinned Suyu exporter. Neither test substitutes for the Suyu HLE kernel, GPU, or a console test.
+Original AArch64 code now runs through the real Suyu static exporter, compiles to a native Orbis executable, writes every framebuffer pixel, and presents four alternating frames through native `SceVideoOut`. Both a deterministic capture build and an independent standalone build have passed in shadPS4 on Linux.
+
+**This is not yet a working Switch emulator or Mario Kart 8 Deluxe port.** The tested native executor is a small generated-code runtime, not the complete Horizon HLE or Maxwell GPU renderer. No physical PS4 execution has been validated.
+
+## Verified native milestone
+
+[CI run 34916702772](https://github.com/dougchansan/suyu-orbis/actions/runs/34916702772), tested code revision `25874425ad97238853b245667aa33ca7b51e2c2d`:
+
+| Check | Result |
+|---|---|
+| Actual pinned Suyu exporter -> original AArch64 diagnostic | Pass |
+| GCC host tests and Clang ASan/UBSan | Pass |
+| Checked guest memory and SVC yield/resume tests | Pass |
+| Native Orbis cross-build and converted PS4 executable | Pass |
+| Guest-written pixels / completed flips | 3,686,400 stores / four flips |
+| Four-frame capture verification | 880 sampled pattern checks |
+| Standalone execution without host capture acknowledgments | Pass |
+| Full Suyu HLE, Switch GPU, game, physical PS4 | Not validated |
+
+See **[native Orbis build, runtime contracts, and evidence](docs/NATIVE_ORBIS.md)**. The native CI artifacts include original diagnostic source, converted executables, reports, and actual captures. They are not game releases or installable PKGs.
 
 ## Implemented
 
-- C11 static-module registry with NSO load-order binding, relocation, entry checks, overflow/overlap checks, immutable post-bind lookup, and no fallback on uncovered or misaligned PCs.
-- Local-export importer using Suyu's existing `recomp_static_<module>` targets and one shared generated runtime. It repairs three missing per-module symbol renames, checks runtime/header identity, and fingerprints build inputs to reject stale exports.
-- Compile-time checks for the actual generated `GuestContext` and `RecompHostMem` ABI; no guessed context allocations.
-- OpenOrbis CMake toolchain, SDK doctor, ELF-to-`eboot.bin` build script, and machine-readable diagnostic reports.
-- An opt-in bridge to the real `Core::SetRecompLookup` / `Core::SetRecompBaseSetter` hooks. Full-core integration is not yet built or validated.
-- Host tests, sanitizer configuration, no-JIT symbol guardrail, real-emitter synthetic test, and CI cross-build configuration.
+- Static-module registry with ordered relocation, entry/range checks, and strict failure on missing or unaligned PCs.
+- Local-export importer using Suyu's static targets and one generated shared runtime, with three missing module-symbol renames repaired and stale/mixed exports rejected.
+- Actual generated `GuestContext` / `RecompHostMem` ABI checks.
+- Native AOT executor with explicit SVC yield/resume and checked scalar guest-memory callbacks; unsupported exclusive operations fail closed.
+- Native Orbis direct-memory and double-buffered `SceVideoOut` backend with completed-flip verification.
+- OpenOrbis build/conversion tools, host tests, actual-emitter tests, and reproducible emulator capture workflows.
+- A separate, still-experimental bridge to the complete Suyu core. A native diagnostic pass is not a full-core integration pass.
 
-## Verified build status
+## Build the native diagnostic
 
-[CI run 34817696559](https://github.com/dougchansan/suyu-orbis/actions/runs/34817696559), code revision `3530e5394fcef18bb4752397ade7be3e8baa16f5`, passed the GCC and Clang host jobs, Clang ASan/UBSan, the actual Suyu-emitter synthetic integration, and OpenOrbis cross-builds of **both diagnostics through nonempty `eboot.bin` output**. ELF/eboot hashes are recorded in [the validation ledger](docs/VALIDATION.md).
-
-**No physical PS4 execution, full Suyu HLE, graphics, or game boot has been validated.** CI produces build evidence, not a playable release, and does not upload the binaries.
-
-## Start on a host
-
-Requirements: a C11 compiler, CMake 3.24+, Ninja, and Python 3.10+. The optional exporter integration needs a C++20 compiler. Linux/WSL is the initial reference build environment.
+Use Linux/WSL with Clang, a C++20 compiler, CMake 3.24+, Ninja, Python 3.10+, and the public OpenOrbis SDK. The SDK release ZIP contains a tarball; extract both layers. Detailed prerequisites are in the native guide and workflow.
 
 ```sh
-git clone https://github.com/dougchansan/suyu-orbis.git
+git clone --branch full-core-linux-smoke https://github.com/dougchansan/suyu-orbis.git
 cd suyu-orbis
+python3 scripts/fetch_upstream.py
+python3 scripts/emit_native_fixture.py
+
+cmake -S native -B build/native-host -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DSO_MODULE_BUNDLE="$PWD/build/native-fixture/bundle"
+cmake --build build/native-host --parallel 2
+ctest --test-dir build/native-host --output-on-failure
+
+export OO_PS4_TOOLCHAIN=/absolute/path/to/OpenOrbis/PS4Toolchain
+cmake -S native -B build/native-standalone -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchains/openorbis.cmake" \
+  -DSO_MODULE_BUNDLE="$PWD/build/native-fixture/bundle" \
+  -DSO_AOT_CAPTURE_HANDSHAKE=OFF
+cmake --build build/native-standalone --target suyu-orbis-aot-render --parallel 2
+```
+
+Use `build/native-standalone/suyu-orbis-aot-render.oelf` for direct shadPS4 execution, not the intermediate `.elf`. The companion eboot is a converted SELF, not a PKG. The standalone app needs no host ACK files; the separate capture-controlled CI build intentionally does.
+
+## Original host and exporter diagnostics
+
+The original registry-only and two-module arithmetic tests remain available:
+
+```sh
 python3 scripts/doctor.py
 cmake --preset host
 cmake --build --preset host
 ctest --preset host
 ./build/host/suyu-orbis-probe
-```
 
-The probe reports `x0: 42`, `suyu_hle_linked: false`, and `game_tested: false`. Its two functions are authored test fixtures, not recompiled game code.
-
-```sh
 CC=clang cmake --preset host-sanitize
 cmake --build --preset host-sanitize
 ctest --preset host-sanitize
 python3 scripts/audit_binary.py build/host/suyu-orbis-probe
-```
 
-The audit checks symbols, not arbitrary memory permissions or every possible executable-code path.
-
-## Exercise the actual Suyu recompiler
-
-```sh
-python3 scripts/fetch_upstream.py
+# After fetching the pinned upstream once:
 python3 scripts/test_upstream.py
 ```
 
-The pinned emitter is `dougchansan/suyu-v0.0.4` at `e6f53df9f160903fd15ed2b0cd91ac60f1f43428`. Its Git blob is verified before use. The test emits two original AArch64 modules, compiles and statically links them, and checks arithmetic, a host-memory store, SVC yield, relocation, and uncovered-address failure. It uses no game assets, firmware, or keys. Existing work directories are not overwritten; choose a new `--work` path to rerun.
+The original probe uses authored C functions, not recompiled game code. The separate actual-emitter tests use original AArch64 inputs. All use Suyu revision `e6f53df9f160903fd15ed2b0cd91ac60f1f43428`; the emitter's Git blob is checked. The symbol audit is a guardrail, not proof of every possible execution path, and should not be applied to ASan runtime imports as though they were JIT use.
 
-## Build the PS4 diagnostic
+Original headless Orbis cross-builds are still provided by `scripts/build_orbis.py`; see [earlier validation](docs/VALIDATION.md).
 
-Install the public [OpenOrbis toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain), including its libraries, CRT, linker script, and host conversion tools. A source checkout containing only headers is insufficient. The CI reference is the official v0.5.3 `toolchain-llvm-18.2.zip` release with host LLVM 18 tools. The release ZIP contains a tarball; extract both layers.
+## Local generated module imports
 
-```sh
-export OO_PS4_TOOLCHAIN=/absolute/path/to/OpenOrbis/PS4Toolchain
-python3 scripts/doctor.py --orbis
-python3 scripts/build_orbis.py
-
-# After the actual-exporter host test above:
-python3 scripts/build_orbis.py --fixture-bundle build/upstream-fixture/bundle
-```
-
-Outputs are under `build/orbis/` and `out/orbis/<diagnostic>/`. The script converts an ELF to `eboot.bin`; it does **not** create an installable PKG, install anything, or launch a PS4. A supported homebrew execution environment must already exist. The headless diagnostics do not initialize a display. Successful device runs write `/data/suyu-orbis-probe.json` or `/data/suyu-orbis-upstream-smoke.json`; writing that report is part of the device test.
-
-An ELF or eboot build is **not** proof of a console boot. See [validation](docs/VALIDATION.md).
-
-## Bring local generated modules into the build
-
-Use trusted exports generated together by the audited exporter, kept outside Git. Input is the directory containing `rtld/`, `main/`, optional `subsdkN/`, and optional `sdk/`.
+Keep trusted exports generated together outside Git. Input is the directory containing `rtld/`, `main/`, optional `subsdkN/`, and optional `sdk/`.
 
 ```sh
 python3 scripts/import_modules.py \
@@ -83,14 +95,14 @@ cmake -S . -B build/local-static -G Ninja \
 cmake --build build/local-static --target so_module_bundle
 ```
 
-This builds static libraries, **not a standalone game application**. The importer never copies guest segments into this repository. Generated C still embodies the input program; keep commercial-game exports and their bundles private. Do not publish local manifests: they include private paths and content fingerprints.
+This builds libraries, **not a standalone game application**. The native display diagnostic expects its specific original test program and private test SVC protocol, not an arbitrary title. Do not substitute those test services for actual Horizon HLE. Generated commercial-game C and manifests containing private paths/hashes must remain private.
 
-## What remains
+## Remaining port work
 
-The full Suyu C++ runtime and dependencies still need an Orbis port: virtual memory, threading/fibers, timing, files, saves, audio, input, and HLE integration. Graphics needs an independently validated backend. [OpenGNM](https://github.com/PS4-OpenGNM/opengnm-stack) is a candidate, not a linked or proven Suyu dependency. Its advertised Vulkan support must be checked against Suyu's actual feature/extension requirements.
+The complete Suyu runtime still needs Orbis platform integration for virtual memory, process/thread scheduling, exclusives, timing, filesystem, services, audio, input, and saves. The present native backend displays CPU-written images; it does not implement Switch GPU commands or shaders. [OpenGNM](https://github.com/PS4-OpenGNM/opengnm-stack) remains a graphics candidate requiring a feature/behavior audit and independent GPU tests.
 
-See [architecture and source audit](docs/ARCHITECTURE.md), [bring-up milestones](docs/ROADMAP.md), and [agent instructions](AGENTS.md).
+Read [native status](docs/NATIVE_ORBIS.md), [source audit](docs/ARCHITECTURE.md), [roadmap](docs/ROADMAP.md), and [agent instructions](AGENTS.md). Earlier documents retain historical baseline evidence; the native guide records the newer verified milestone.
 
 ## License and inputs
 
-Project source is GPL-2.0-or-later; see [LICENSE](LICENSE). External components retain their licenses. No Nintendo games, firmware, keys, generated commercial game code, or proprietary Sony SDK files are included. See [repository policy](LEGAL.md). CI does not publish releases or upload binaries.
+Project source is GPL-2.0-or-later; see [LICENSE](LICENSE). External components retain their licenses. No Nintendo games, firmware, keys, generated commercial-game source, or proprietary Sony SDK files are included. See [repository policy](LEGAL.md). No game releases are published; native test artifacts contain only original diagnostics and their build/source evidence.
