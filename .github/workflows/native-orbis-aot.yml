@@ -1,0 +1,152 @@
+name: Native Orbis AOT execution and presentation
+on:
+  push:
+    branches: [full-core-linux-smoke]
+    paths:
+      - 'native/**'
+      - 'platform/orbis/**'
+      - 'src/aot.c'
+      - 'src/memory.c'
+      - 'include/suyu_orbis/**'
+      - 'experiments/orbis_aot_render/**'
+      - 'tests/aot_runtime_tests.c'
+      - 'tests/memory_tests.c'
+      - 'scripts/emit_native_fixture.py'
+      - 'scripts/ci/capture_native_aot.py'
+      - '.github/workflows/native-orbis-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-orbis-aot-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dougchansan/suyu-v0.0.4
+          ref: e6f53df9f160903fd15ed2b0cd91ac60f1f43428
+          path: vendor/suyu
+          sparse-checkout: src/core/recompiler/arm64_to_c.h
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Install host build and emulator dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 llvm-18 ninja-build unzip curl ca-certificates \
+            xvfb xauth xdotool ffmpeg python3-pil vulkan-tools mesa-vulkan-drivers libvulkan1 libfuse2 \
+            libx11-6 libxext6 libwayland-client0 libdecor-0-0 libxkbcommon0 \
+            libglfw3 libgles2 libasound2t64 libpulse0 libopenal1 libudev1 \
+            libxcursor1 libxi6 libxss1 libxtst6 libxrandr2 libxfixes3
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+      - name: Assemble and statically recompile the original AArch64 diagnostic
+        run: python3 scripts/emit_native_fixture.py
+      - name: Host execution, pixel verification, and failure tests
+        run: |
+          cmake -S native -B build/native-host -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSO_MODULE_BUNDLE="$GITHUB_WORKSPACE/build/native-fixture/bundle"
+          cmake --build build/native-host --parallel 2
+          ctest --test-dir build/native-host --output-on-failure
+          python3 scripts/audit_binary.py build/native-host/aot-runtime-tests
+      - name: Real emitted-code ASan and UBSan execution
+        run: |
+          CC=clang CXX=clang++ cmake -S native -B build/native-sanitize -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DSO_SANITIZE=ON \
+            -DSO_MODULE_BUNDLE="$GITHUB_WORKSPACE/build/native-fixture/bundle"
+          cmake --build build/native-sanitize --parallel 2
+          ctest --test-dir build/native-sanitize --output-on-failure
+      - name: Install verified public OpenOrbis SDK
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/toolchain-llvm-18.2.zip -o "$RUNNER_TEMP/openorbis.zip"
+          echo "5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f  $RUNNER_TEMP/openorbis.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/openorbis.zip" -d "$RUNNER_TEMP/openorbis"
+          mapfile -t ARCHIVE < <(find "$RUNNER_TEMP/openorbis" -name 'toolchain-llvm-*.tar.gz' -type f)
+          test "${#ARCHIVE[@]}" -eq 1
+          tar -xzf "${ARCHIVE[0]}" -C "$RUNNER_TEMP/openorbis"
+          mapfile -t CRT < <(find "$RUNNER_TEMP/openorbis" -path '*/lib/crt1.o' -type f)
+          test "${#CRT[@]}" -eq 1
+          SDK="${CRT[0]%/lib/crt1.o}"
+          chmod +x "$SDK/bin/linux/create-fself"
+          echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
+      - name: Cross-build the native AOT application
+        run: |
+          cmake -S native -B build/native-orbis -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/toolchains/openorbis.cmake" \
+            -DSO_MODULE_BUNDLE="$GITHUB_WORKSPACE/build/native-fixture/bundle" \
+            -DSO_AOT_CAPTURE_HANDSHAKE=ON
+          cmake --build build/native-orbis --target suyu-orbis-aot-render --parallel 2
+          python3 scripts/audit_binary.py build/native-orbis/suyu-orbis-aot-render.elf
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+          data=Path('build/native-orbis/suyu-orbis-aot-render.oelf').read_bytes()
+          assert data[:4]==b'\x7fELF' and data[7]==9
+          assert struct.unpack_from('<H',data,16)[0]==0xfe10
+          print('PS4 ET_SCE_DYNEXEC verified')
+          PY
+          llvm-nm build/native-orbis/suyu-orbis-aot-render.elf | grep -E 'recomp_image_lookup_(rtld|main)|sceVideoOutSubmitFlip|sceKernelMapDirectMemory'
+      - name: Prepare unmodified shadPS4 and software Vulkan
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 https://github.com/shadps4-emu/shadPS4/releases/download/v.0.18.0/shadps4-linux-sdl-0.18.0.zip -o "$RUNNER_TEMP/shad.zip"
+          echo "3cf0f669c089411775a2434a41ca9c391fb7d24c1a1521ee45dd1d36f390c4a4  $RUNNER_TEMP/shad.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/shad.zip" -d "$RUNNER_TEMP/shad"
+          mapfile -t APP < <(find "$RUNNER_TEMP/shad" -type f -iname '*.appimage')
+          test "${#APP[@]}" -eq 1
+          chmod +x "${APP[0]}"
+          echo "SHADPS4_BIN=${APP[0]}" >> "$GITHUB_ENV"
+          LVP="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -type f | head -1)"
+          test -n "$LVP"
+          echo "VK_ICD_FILENAMES=$LVP" >> "$GITHUB_ENV"
+          VK_ICD_FILENAMES="$LVP" vulkaninfo --summary
+      - name: Permit low guest addresses only on disposable hosted runner
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          echo "ORIGINAL_MMAP_MIN_ADDR=$(sysctl -n vm.mmap_min_addr)" >> "$GITHUB_ENV"
+          sudo sysctl -w vm.mmap_min_addr=0
+      - name: Execute native Orbis code and verify four changing frames
+        run: |
+          python3 scripts/ci/capture_native_aot.py --emulator "$SHADPS4_BIN" \
+            --executable build/native-orbis/suyu-orbis-aot-render.oelf \
+            --output build/native-evidence
+      - name: Restore Linux address policy
+        if: always()
+        run: |
+          if test -n "${ORIGINAL_MMAP_MIN_ADDR:-}"; then
+            sudo sysctl -w "vm.mmap_min_addr=$ORIGINAL_MMAP_MIN_ADDR"
+          fi
+      - name: Preserve original fixture source for reproducibility
+        if: always()
+        run: |
+          mkdir -p build/native-repro
+          cp LICENSE build/native-repro/
+          cp -a native platform include src tests scripts experiments CMakeLists.txt CMakePresets.json deps.lock.json build/native-repro/
+          if test -d build/native-fixture; then
+            cp -a build/native-fixture/exefs build/native-repro/ || true
+            cp build/native-fixture/fixture.json build/native-repro/ || true
+          fi
+      - name: Upload native test evidence (original diagnostics only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-orbis-aot-${{ github.sha }}
+          path: |
+            build/native-evidence/*.png
+            build/native-evidence/*.json
+            build/native-evidence/*.txt
+            build/native-evidence/*.log
+            build/native-evidence/profile/user/data/
+            build/native-evidence/profile/user/log/
+            build/native-orbis/suyu-orbis-aot-render.elf
+            build/native-orbis/suyu-orbis-aot-render.oelf
+            build/native-repro/
+          if-no-files-found: warn
+          retention-days: 14
