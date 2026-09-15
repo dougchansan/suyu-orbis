@@ -1,0 +1,66 @@
+name: Fetch Debian sandbox development dependencies
+
+on:
+  push:
+    branches: [full-core-linux-smoke]
+    paths:
+      - '.github/workflows/sandbox-dependencies.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch signed-repository Debian 13 packages in an isolated container
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/sandbox-debs"
+          docker pull debian:trixie-slim
+          docker image inspect debian:trixie-slim \
+            --format '{{json .RepoDigests}}' > "$GITHUB_WORKSPACE/sandbox-debs/container-image.json"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE/sandbox-debs:/out" \
+            debian:trixie-slim bash -euc '
+              apt-get update
+              apt-get install --download-only -y --no-install-recommends \
+                pkg-config ninja-build nasm autoconf glslang-tools \
+                libboost-dev libboost-filesystem-dev libboost-context-dev \
+                libusb-1.0-0-dev libssl-dev \
+                libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
+                libswscale-dev libswresample-dev \
+                libzstd-dev liblz4-dev libgl1-mesa-dev \
+                libasound2-dev libpulse-dev \
+                libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+                libxfixes-dev libxkbcommon-dev libxss-dev libxtst-dev \
+                libwayland-dev libwayland-egl1 wayland-protocols libdecor-0-dev \
+                libegl-dev libdrm-dev libgbm-dev libvulkan-dev
+              mkdir -p /out/packages
+              cp /var/cache/apt/archives/*.deb /out/packages/
+              cp /etc/os-release /out/os-release
+              apt-cache policy > /out/repository-policy.txt
+              for file in /out/packages/*.deb; do
+                dpkg-deb -f "$file" Package Version Architecture
+              done > /out/package-versions.txt
+              cd /out
+              sha256sum packages/*.deb > SHA256SUMS
+              printf "%s\n" \
+                "Debian 13 amd64 development packages fetched by apt from authenticated repository indexes." \
+                "Inspect package versions against the target sandbox before installing; do not replace host files blindly." \
+                "Compiler, CMake, and base operating-system packages may already be provided by the sandbox." \
+                "No user files, games, keys, proprietary SDKs, or credentials are included." \
+                > README.txt
+            '
+          du -sh sandbox-debs
+
+      - name: Make fetched packages available to sandbox
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian13-sandbox-development-${{ github.sha }}
+          path: sandbox-debs/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

@@ -19,6 +19,10 @@ concurrency:
   group: full-core-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CCACHE_DIR: /home/runner/.cache/suyu-full-core-ccache
+  CCACHE_MAXSIZE: 2G
+
 jobs:
   full-core:
     runs-on: ubuntu-24.04
@@ -26,6 +30,8 @@ jobs:
     steps:
       - name: Checkout suyu-orbis experiment
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Checkout pinned Suyu source
         uses: actions/checkout@v4
@@ -37,11 +43,19 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Restore full-core compiler cache
+        id: compiler-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /home/runner/.cache/suyu-full-core-ccache
+          key: full-core-gcc13-e6f53df9-v1-${{ github.sha }}
+          restore-keys: full-core-gcc13-e6f53df9-v1-
+
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config ninja-build nasm autoconf curl ca-certificates \
+            build-essential pkg-config ninja-build nasm autoconf curl ca-certificates ccache \
             glslang-tools \
             libboost-dev libboost-filesystem-dev libboost-context-dev \
             libusb-1.0-0-dev libssl-dev \
@@ -53,6 +67,7 @@ jobs:
             libxfixes-dev libxkbcommon-dev libxss-dev libxtst-dev \
             libwayland-dev libwayland-egl1 wayland-protocols libdecor-0-dev \
             libegl-dev libdrm-dev libgbm-dev libvulkan-dev
+          ccache --zero-stats
 
       - name: Install CMake 3.31.6
         run: |
@@ -85,11 +100,11 @@ jobs:
       - name: Configure real Suyu core without Dynarmic
         run: |
           cmake --version
-          # DYNARMIC_TESTS defaults from BUILD_TESTING before externals disables
-          # it. Explicitly exclude unrelated JIT tests/Oaknut examples, including
-          # the C++23 <print> example which failed on GCC 13's standard library.
           cmake -S upstream-suyu -B build/full-suyu -GNinja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DSUYU_NO_JIT=ON \
             -DBUILD_TESTING=OFF \
             -DDYNARMIC_TESTS=OFF \
@@ -110,12 +125,55 @@ jobs:
             -DYUZU_BUILD_PRESET=generic \
             -DSO_FULL_CORE_BUNDLE="$GITHUB_WORKSPACE/build/full-core-fixture/bundle"
 
+      - name: Export public sources and resolved dependencies for offline sandbox
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/build/sandbox-inputs"
+          STAGE="$RUNNER_TEMP/sandbox-sources"
+          mkdir -p "$OUT" "$STAGE/suyu-orbis" "$STAGE/upstream-suyu"
+          # Export tracked project content, never working-tree private files.
+          git archive HEAD | tar -xf - -C "$STAGE/suyu-orbis"
+          # Include checked-out public submodules, but no .git credentials or metadata.
+          tar --exclude=.git -C upstream-suyu -cf - . | tar -xf - -C "$STAGE/upstream-suyu"
+          # Undo ONLY this workflow's injected absolute include in the export.
+          git -C upstream-suyu show HEAD:CMakeLists.txt > "$STAGE/upstream-suyu/CMakeLists.txt"
+          tar -czf "$OUT/project-sources.tar.gz" -C "$STAGE" suyu-orbis
+          tar -czf "$OUT/upstream-with-submodules.tar.gz" -C "$STAGE" upstream-suyu
+          find build/full-suyu/_deps -mindepth 1 -maxdepth 1 -type d -name '*-src' -printf '%f\n' \
+            | sort > "$OUT/dependency-directories.txt"
+          test -s "$OUT/dependency-directories.txt"
+          tar --exclude=.git -czf "$OUT/resolved-dependency-sources.tar.gz" \
+            -C build/full-suyu/_deps -T "$OUT/dependency-directories.txt"
+          git rev-parse HEAD > "$OUT/project-revision.txt"
+          git -C upstream-suyu rev-parse HEAD > "$OUT/upstream-revision.txt"
+          git -C upstream-suyu submodule status --recursive > "$OUT/submodule-revisions.txt"
+          cp build/full-suyu/CMakeCache.txt "$OUT/ci-CMakeCache.txt"
+          cp build/full-suyu/compile_commands.json "$OUT/ci-compile-commands.json"
+          dpkg-query -W > "$OUT/ci-package-versions.txt"
+          printf '%s\n' \
+            'Public source/dependency bundle; no games, keys, firmware, proprietary SDKs or Git credentials.' \
+            'Sources are portable; ci-CMakeCache.txt and compile commands are provenance only.' \
+            'Configure a fresh build and regenerate local module imports; do not reuse CI absolute paths.' \
+            'System development packages are separate: see the sandbox dependency retrieval workflow.' \
+            > "$OUT/README.txt"
+          (cd "$OUT" && sha256sum *.tar.gz > SHA256SUMS)
+          du -h "$OUT/"*.tar.gz
+
+      - name: Make fetched sources available to sandbox immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-full-core-sources-${{ github.sha }}
+          path: build/sandbox-inputs/
+          compression-level: 0
+          retention-days: 7
+
       - name: Build real core, bridge, generated modules, and smoke executable
+        id: build
         run: |
           set -o pipefail
           cmake --build build/full-suyu \
             --target core suyu_orbis_bridge so_module_bundle suyu_orbis_full_core_smoke \
-            --parallel 2 2>&1 | tee build/full-core-build.log
+            --parallel 3 2>&1 | tee build/full-core-build.log
 
       - name: Prove no Dynarmic/JIT symbols are linked
         run: |
@@ -128,14 +186,36 @@ jobs:
           fi
 
       - name: Execute real ArmRecomp to real HLE and resume
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           SUYU_RECOMP_STRICT: '1'
         run: |
           set -o pipefail
-          build/full-suyu/bin/suyu_orbis_full_core_smoke | tee build/full-core-smoke.json
+          timeout --kill-after=5s 90s build/full-suyu/bin/suyu_orbis_full_core_smoke \
+            2>&1 | tee build/full-core-smoke.json
           grep -q '"passed":true' build/full-core-smoke.json
           grep -q '"svc":30' build/full-core-smoke.json
           grep -q '"jit_available":false' build/full-core-smoke.json
+
+      - name: Preserve linked executable and its runtime dependencies
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          BIN=build/full-suyu/bin/suyu_orbis_full_core_smoke
+          mkdir -p build/sandbox-runtime/lib
+          cp "$BIN" build/sandbox-runtime/
+          ldd "$BIN" | tee build/sandbox-runtime/ldd.txt
+          ldd "$BIN" | awk '$2 == "=>" && $3 ~ /^\// {print $3}' | sort -u \
+            | while IFS= read -r lib; do cp -L "$lib" build/sandbox-runtime/lib/; done
+          readelf -l "$BIN" > build/sandbox-runtime/program-headers.txt
+          nm -C "$BIN" > build/sandbox-runtime/symbols.txt
+          sha256sum "$BIN" > build/sandbox-runtime/executable-sha256.txt
+          printf '%s\n' \
+            'Linux test executable, not a PS4 app or a game.' \
+            'Ubuntu 24.04 runtime libraries included for debugging; do not install them system-wide.' \
+            'Try the binary with host libraries first. Keep any compatibility loader isolated.' \
+            > build/sandbox-runtime/README.txt
+          tar -czf build/sandbox-runtime.tar.gz -C build sandbox-runtime
 
       - name: Evidence summary
         if: always()
@@ -150,13 +230,22 @@ jobs:
             echo '- Synthetic context restore, not a production process/scheduler test'
             echo
             if test -f build/full-core-smoke.json; then
-              echo '```json'
+              echo '```text'
               cat build/full-core-smoke.json
               echo '```'
             else
-              echo 'Smoke executable did not reach its JSON result; inspect the failing build/run step.'
+              echo 'Smoke executable did not reach its result; inspect the failing build/run step.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          ccache --show-stats || true
+
+      - name: Save compiler cache even after a link or runtime failure
+        if: ${{ always() && steps.compiler-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: /home/runner/.cache/suyu-full-core-ccache
+          key: full-core-gcc13-e6f53df9-v1-${{ github.sha }}
+
       - name: Preserve compile and execution evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -165,5 +254,6 @@ jobs:
           path: |
             build/full-core-build.log
             build/full-core-smoke.json
+            build/sandbox-runtime.tar.gz
           if-no-files-found: warn
           retention-days: 14

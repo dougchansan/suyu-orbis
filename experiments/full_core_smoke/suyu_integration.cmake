@@ -20,6 +20,15 @@ set(SO_MODULE_BUNDLE "${SO_FULL_CORE_BUNDLE}" CACHE PATH "" FORCE)
 add_subdirectory("${SO_REPO_ROOT}" "${CMAKE_BINARY_DIR}/suyu-orbis")
 add_subdirectory("${SO_REPO_ROOT}/integrations" "${CMAKE_BINARY_DIR}/suyu-orbis-integrations")
 
+# core's NS query service uses PlayTimeManager, whose actual implementation is
+# owned by frontend_common even with Qt disabled. The old standalone link
+# omitted that archive and failed on its constructor/destructor/GetPlayTime.
+# Link the real target, including its declared transitive dependencies; never
+# replace the service with stubs or suppress unresolved symbols.
+if(NOT TARGET frontend_common)
+    message(FATAL_ERROR "Pinned Suyu frontend_common target is required for PlayTimeManager")
+endif()
+
 add_executable(suyu_orbis_full_core_smoke
     "${CMAKE_CURRENT_LIST_DIR}/arm_recomp_smoke.cpp")
 target_compile_features(suyu_orbis_full_core_smoke PRIVATE cxx_std_20)
@@ -29,7 +38,8 @@ target_include_directories(suyu_orbis_full_core_smoke PRIVATE
 target_link_libraries(suyu_orbis_full_core_smoke PRIVATE
     suyu_orbis_bridge
     so_module_bundle
-    core)
+    core
+    frontend_common)
 
 # The smoke binary must inherit SUYU_NO_JIT from core. Make that assumption
 # visible during configuration rather than silently relying on target order.
