@@ -13,6 +13,7 @@ on:
       - 'tests/memory_tests.c'
       - 'scripts/emit_native_fixture.py'
       - 'scripts/ci/capture_native_aot.py'
+      - 'scripts/ci/capture_native_standalone.py'
       - '.github/workflows/native-orbis-aot.yml'
   workflow_dispatch:
 permissions:
@@ -93,6 +94,14 @@ jobs:
           print('PS4 ET_SCE_DYNEXEC verified')
           PY
           llvm-nm build/native-orbis/suyu-orbis-aot-render.elf | grep -E 'recomp_image_lookup_(rtld|main)|sceVideoOutSubmitFlip|sceKernelMapDirectMemory'
+      - name: Build independent standalone executable
+        run: |
+          cmake -S native -B build/native-standalone -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/cmake/toolchains/openorbis.cmake" \
+            -DSO_MODULE_BUNDLE="$GITHUB_WORKSPACE/build/native-fixture/bundle" \
+            -DSO_AOT_CAPTURE_HANDSHAKE=OFF
+          cmake --build build/native-standalone --target suyu-orbis-aot-render --parallel 2
+          python3 scripts/audit_binary.py build/native-standalone/suyu-orbis-aot-render.elf
       - name: Prepare unmodified shadPS4 and software Vulkan
         run: |
           set -euo pipefail
@@ -117,6 +126,11 @@ jobs:
           python3 scripts/ci/capture_native_aot.py --emulator "$SHADPS4_BIN" \
             --executable build/native-orbis/suyu-orbis-aot-render.oelf \
             --output build/native-evidence
+      - name: Prove standalone execution without capture acknowledgments
+        run: |
+          python3 scripts/ci/capture_native_standalone.py --emulator "$SHADPS4_BIN" \
+            --executable build/native-standalone/suyu-orbis-aot-render.oelf \
+            --output build/standalone-evidence
       - name: Restore Linux address policy
         if: always()
         run: |
@@ -128,7 +142,7 @@ jobs:
         run: |
           mkdir -p build/native-repro
           cp LICENSE build/native-repro/
-          cp -a native platform include src tests scripts experiments CMakeLists.txt CMakePresets.json deps.lock.json build/native-repro/
+          cp -a cmake native platform include src tests scripts experiments CMakeLists.txt CMakePresets.json deps.lock.json build/native-repro/
           if test -d build/native-fixture; then
             cp -a build/native-fixture/exefs build/native-repro/ || true
             cp build/native-fixture/fixture.json build/native-repro/ || true
@@ -148,5 +162,14 @@ jobs:
             build/native-orbis/suyu-orbis-aot-render.elf
             build/native-orbis/suyu-orbis-aot-render.oelf
             build/native-repro/
+            build/standalone-evidence/*.png
+            build/standalone-evidence/*.json
+            build/standalone-evidence/*.txt
+            build/standalone-evidence/*.log
+            build/standalone-evidence/profile/user/data/
+            build/standalone-evidence/profile/user/log/
+            build/native-standalone/suyu-orbis-aot-render.elf
+            build/native-standalone/suyu-orbis-aot-render.oelf
+            build/native-standalone/suyu-orbis-aot-render-eboot.bin
           if-no-files-found: warn
           retention-days: 14
