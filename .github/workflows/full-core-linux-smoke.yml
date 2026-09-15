@@ -98,6 +98,7 @@ jobs:
           tail -n 4 upstream-suyu/CMakeLists.txt
 
       - name: Configure real Suyu core without Dynarmic
+        id: configure
         run: |
           cmake --version
           cmake -S upstream-suyu -B build/full-suyu -GNinja \
@@ -131,19 +132,21 @@ jobs:
           OUT="$GITHUB_WORKSPACE/build/sandbox-inputs"
           STAGE="$RUNNER_TEMP/sandbox-sources"
           mkdir -p "$OUT" "$STAGE/suyu-orbis" "$STAGE/upstream-suyu"
-          # Export tracked project content, never working-tree private files.
           git archive HEAD | tar -xf - -C "$STAGE/suyu-orbis"
-          # Include checked-out public submodules, but no .git credentials or metadata.
-          tar --exclude=.git -C upstream-suyu -cf - . | tar -xf - -C "$STAGE/upstream-suyu"
-          # Undo ONLY this workflow's injected absolute include in the export.
+          # Include public submodules, excluding Git metadata and the separate cache.
+          tar --exclude=.git --exclude=.cache -C upstream-suyu -cf - . \
+            | tar -xf - -C "$STAGE/upstream-suyu"
           git -C upstream-suyu show HEAD:CMakeLists.txt > "$STAGE/upstream-suyu/CMakeLists.txt"
           tar -czf "$OUT/project-sources.tar.gz" -C "$STAGE" suyu-orbis
           tar -czf "$OUT/upstream-with-submodules.tar.gz" -C "$STAGE" upstream-suyu
-          find build/full-suyu/_deps -mindepth 1 -maxdepth 1 -type d -name '*-src' -printf '%f\n' \
+          # The pinned CPMUtil stores sources in SOURCE/.cache/cpm, not _deps/*-src.
+          test -d upstream-suyu/.cache/cpm
+          find upstream-suyu/.cache/cpm -mindepth 2 -maxdepth 2 -type d \
             | sort > "$OUT/dependency-directories.txt"
           test -s "$OUT/dependency-directories.txt"
+          # Extract this archive into the upstream-suyu directory on the sandbox.
           tar --exclude=.git -czf "$OUT/resolved-dependency-sources.tar.gz" \
-            -C build/full-suyu/_deps -T "$OUT/dependency-directories.txt"
+            -C upstream-suyu .cache/cpm
           git rev-parse HEAD > "$OUT/project-revision.txt"
           git -C upstream-suyu rev-parse HEAD > "$OUT/upstream-revision.txt"
           git -C upstream-suyu submodule status --recursive > "$OUT/submodule-revisions.txt"
@@ -152,6 +155,7 @@ jobs:
           dpkg-query -W > "$OUT/ci-package-versions.txt"
           printf '%s\n' \
             'Public source/dependency bundle; no games, keys, firmware, proprietary SDKs or Git credentials.' \
+            'Extract project/upstream archives to one workspace; extract the dependency archive inside upstream-suyu.' \
             'Sources are portable; ci-CMakeCache.txt and compile commands are provenance only.' \
             'Configure a fresh build and regenerate local module imports; do not reuse CI absolute paths.' \
             'System development packages are separate: see the sandbox dependency retrieval workflow.' \
@@ -160,15 +164,18 @@ jobs:
           du -h "$OUT/"*.tar.gz
 
       - name: Make fetched sources available to sandbox immediately
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sandbox-full-core-sources-${{ github.sha }}
           path: build/sandbox-inputs/
           compression-level: 0
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Build real core, bridge, generated modules, and smoke executable
         id: build
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
         run: |
           set -o pipefail
           cmake --build build/full-suyu \
@@ -176,6 +183,7 @@ jobs:
             --parallel 3 2>&1 | tee build/full-core-build.log
 
       - name: Prove no Dynarmic/JIT symbols are linked
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           BIN=build/full-suyu/bin/suyu_orbis_full_core_smoke
           test -x "$BIN"
