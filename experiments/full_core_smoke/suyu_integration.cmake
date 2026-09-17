@@ -45,3 +45,16 @@ target_link_libraries(suyu_orbis_full_core_smoke PRIVATE
 # visible during configuration rather than silently relying on target order.
 get_target_property(_so_core_defs core INTERFACE_COMPILE_DEFINITIONS)
 message(STATUS "suyu-orbis full-core smoke: core interface definitions=${_so_core_defs}")
+
+# Separate from the historical direct-call smoke. Enable only with the original
+# extended fixture emitted by experiments/process_smoke/emit_fixture.cpp.
+option(SO_BUILD_PROCESS_SMOKE "Build real scheduled-process SVC regression" OFF)
+if(SO_BUILD_PROCESS_SMOKE)
+    add_executable(suyu_orbis_process_smoke
+        "${SO_REPO_ROOT}/experiments/process_smoke/process_smoke.cpp")
+    target_compile_features(suyu_orbis_process_smoke PRIVATE cxx_std_20)
+    target_include_directories(suyu_orbis_process_smoke PRIVATE
+        "${CMAKE_SOURCE_DIR}/src" "${SO_REPO_ROOT}/integrations")
+    target_link_libraries(suyu_orbis_process_smoke PRIVATE
+        suyu_orbis_bridge so_module_bundle core frontend_common nlohmann_json::nlohmann_json)
+endif()

@@ -6,10 +6,13 @@ on:
     paths:
       - '.github/workflows/full-core-linux-smoke.yml'
       - 'experiments/full_core_smoke/**'
+      - 'experiments/process_smoke/**'
       - 'integrations/**'
       - 'include/suyu_orbis/**'
       - 'src/registry.c'
       - 'scripts/import_modules.py'
+      - 'scripts/run_process_smoke.py'
+      - 'tests/test_process_report.py'
   workflow_dispatch:
 
 permissions:
@@ -77,13 +80,16 @@ jobs:
           sudo tar xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
           echo /opt/cmake/bin >> "$GITHUB_PATH"
 
-      - name: Emit original AArch64 fixture with real Suyu exporter
+      - name: Emit original AArch64 process fixture with real Suyu exporter
         run: |
           set -euo pipefail
+          python3 experiments/process_smoke/verify_program.py
+          python3 -m unittest tests/test_process_report.py -v
           mkdir -p build/full-core-fixture
           c++ -std=c++20 -O1 \
             -I "$GITHUB_WORKSPACE/upstream-suyu/src/core/recompiler" \
-            experiments/full_core_smoke/upstream_fixture.cpp \
+            -I "$GITHUB_WORKSPACE/experiments/process_smoke" \
+            experiments/process_smoke/emit_fixture.cpp \
             -o build/full-core-fixture/emit-fixture
           ./build/full-core-fixture/emit-fixture build/full-core-fixture/exefs
           python3 scripts/import_modules.py \
@@ -124,7 +130,8 @@ jobs:
             -DYUZU_DISABLE_LLVM=ON \
             -Dfmt_FORCE_BUNDLED=ON \
             -DYUZU_BUILD_PRESET=generic \
-            -DSO_FULL_CORE_BUNDLE="$GITHUB_WORKSPACE/build/full-core-fixture/bundle"
+            -DSO_FULL_CORE_BUNDLE="$GITHUB_WORKSPACE/build/full-core-fixture/bundle" \
+            -DSO_BUILD_PROCESS_SMOKE=ON
 
       - name: Export public sources and resolved dependencies for offline sandbox
         run: |
@@ -179,19 +186,25 @@ jobs:
         run: |
           set -o pipefail
           cmake --build build/full-suyu \
-            --target core suyu_orbis_bridge so_module_bundle suyu_orbis_full_core_smoke \
+            --target core suyu_orbis_bridge so_module_bundle suyu_orbis_full_core_smoke suyu_orbis_process_smoke \
             --parallel 3 2>&1 | tee build/full-core-build.log
 
-      - name: Prove no Dynarmic/JIT symbols are linked
+      - name: Prove no dynamic CPU/JIT backend symbols are linked
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
-          BIN=build/full-suyu/bin/suyu_orbis_full_core_smoke
-          test -x "$BIN"
-          python3 scripts/audit_binary.py "$BIN"
-          if nm -C "$BIN" | grep -E 'Dynarmic::|ArmDynarmic'; then
-            echo 'Dynarmic symbol unexpectedly present in no-JIT smoke binary' >&2
-            exit 1
-          fi
+          set -euo pipefail
+          for BIN in \
+            build/full-suyu/bin/suyu_orbis_full_core_smoke \
+            build/full-suyu/bin/suyu_orbis_process_smoke; do
+            test -x "$BIN"
+            if nm -C "$BIN" | grep -E 'Dynarmic::|ArmDynarmic|__jit_debug_register_code'; then
+              echo "Dynamic CPU/JIT symbol unexpectedly present in $BIN" >&2
+              exit 1
+            fi
+          done
+          # Full Suyu legitimately links host libraries that use dlopen/dlsym;
+          # the minimal standalone audit remains strict about those symbols.
+          # This gate is specifically the CPU-backend guarantee for SUYU_NO_JIT.
 
       - name: Execute real ArmRecomp to real HLE and resume
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -205,19 +218,38 @@ jobs:
           grep -q '"svc":30' build/full-core-smoke.json
           grep -q '"jit_available":false' build/full-core-smoke.json
 
+      - name: Execute real process/thread scheduler and normal SVC dispatch
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          rm -rf build/process-smoke-evidence
+          python3 scripts/run_process_smoke.py \
+            build/full-suyu/bin/suyu_orbis_process_smoke \
+            --output build/process-smoke-evidence \
+            --timeout 30
+          python3 - <<'PY2'
+          import json
+          from pathlib import Path
+          report=json.loads(Path('build/process-smoke-evidence/guest-report.json').read_text())
+          print('normal SVC sequence:', report['svcs'])
+          print('sleep/resume ns:', report['sleep_resume_interval_ns'])
+          print('static blocks:', report['static_blocks'])
+          PY2
+
       - name: Preserve linked executable and its runtime dependencies
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           set -euo pipefail
           BIN=build/full-suyu/bin/suyu_orbis_full_core_smoke
+          PROCESS_BIN=build/full-suyu/bin/suyu_orbis_process_smoke
           mkdir -p build/sandbox-runtime/lib
-          cp "$BIN" build/sandbox-runtime/
+          cp "$BIN" "$PROCESS_BIN" build/sandbox-runtime/
           ldd "$BIN" | tee build/sandbox-runtime/ldd.txt
           ldd "$BIN" | awk '$2 == "=>" && $3 ~ /^\// {print $3}' | sort -u \
             | while IFS= read -r lib; do cp -L "$lib" build/sandbox-runtime/lib/; done
           readelf -l "$BIN" > build/sandbox-runtime/program-headers.txt
           nm -C "$BIN" > build/sandbox-runtime/symbols.txt
-          sha256sum "$BIN" > build/sandbox-runtime/executable-sha256.txt
+          sha256sum "$BIN" "$PROCESS_BIN" > build/sandbox-runtime/executable-sha256.txt
           printf '%s\n' \
             'Linux test executable, not a PS4 app or a game.' \
             'Ubuntu 24.04 runtime libraries included for debugging; do not install them system-wide.' \
@@ -235,14 +267,24 @@ jobs:
             echo '- Configuration: `SUYU_NO_JIT=ON`'
             echo '- Fixture: original synthetic AArch64, exported by pinned Suyu'
             echo '- SVC target: `0x1E GetSystemTick` real HLE implementation'
-            echo '- Synthetic context restore, not a production process/scheduler test'
+            echo '- Historical direct-call smoke retained as a regression baseline'
+            echo '- Scheduled-process regression uses a real KProcess/KThread, normal SVC dispatcher, sleep/wake, and ExitThread'
             echo
             if test -f build/full-core-smoke.json; then
+              echo '### Direct-call baseline'
               echo '```text'
               cat build/full-core-smoke.json
               echo '```'
             else
-              echo 'Smoke executable did not reach its result; inspect the failing build/run step.'
+              echo 'Direct-call smoke did not reach its result; inspect the failing build/run step.'
+            fi
+            if test -f build/process-smoke-evidence/guest-report.json; then
+              echo '### Normal scheduled process/SVC path'
+              echo '```json'
+              cat build/process-smoke-evidence/guest-report.json
+              echo '```'
+            else
+              echo 'Scheduled process smoke did not produce a validated report.'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           ccache --show-stats || true
@@ -262,6 +304,7 @@ jobs:
           path: |
             build/full-core-build.log
             build/full-core-smoke.json
+            build/process-smoke-evidence/
             build/sandbox-runtime.tar.gz
           if-no-files-found: warn
           retention-days: 14
