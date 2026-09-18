@@ -85,7 +85,8 @@ CHANGES = {'libcxx/include/__locale_dir/locale_base_api.h': ('c360e4d8315c264c11
                              '  const auto ns = whole * __ns_per_second + fraction * __ns_per_second / frequency;\n'
                              '  return steady_clock::time_point(nanoseconds(static_cast<nanoseconds::rep>(ns)));\n'
                              '}\n\n'
-                             '#  elif defined(__APPLE__)\n')]),\n 'libcxx/src/filesystem/operations.cpp': ('c2ff243df7206f32aaffed77ed18e1b5a0cf96ecb641bfe65dd935adea52b6e8',
+                             '#  elif defined(__APPLE__)\n')]),
+ 'libcxx/src/filesystem/operations.cpp': ('c2ff243df7206f32aaffed77ed18e1b5a0cf96ecb641bfe65dd935adea52b6e8',
                                           [('#elif defined(__FreeBSD__)\n',
                                             '#elif defined(__FreeBSD__) && !defined(PS4)\n'),
                                            ('#if __has_include(<sys/sendfile.h>)\n',
