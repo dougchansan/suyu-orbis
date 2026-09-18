@@ -87,30 +87,39 @@ CHANGES = {'libcxx/include/__locale_dir/locale_base_api.h': ('c360e4d8315c264c11
                              '}\n\n'
                              '#  elif defined(__APPLE__)\n')]),
  'libcxx/src/filesystem/time_utils.h': ('b264875005a9a897e6b547d579959e7c9e808528dc3841efd9ffaaf488a4bf0d',
-                                           [('#  include <sys/time.h> // for ::utimes as used in __last_write_time\n#endif\n',
-                                             '#  include <sys/time.h> // for ::utimes as used in __last_write_time\n'
-                                             '#  if defined(PS4)\n'
-                                             '#    include <orbis/libkernel.h>\n'
-                                             '#  endif\n'
-                                             '#endif\n'),
-                                            ('using TimeSpec = struct timespec;\n'
+                                           [('using TimeSpec = struct timespec;\n'
                                              'using TimeVal  = struct timeval;\n'
                                              'using StatT    = struct stat;\n',
                                              'using TimeSpec = struct timespec;\n'
                                              'using TimeVal  = struct timeval;\n'
                                              '#  if defined(PS4)\n'
-                                             '// PS4 kernel stat layout is not the generic musl/FreeBSD host layout.\n'
-                                             'using StatT = OrbisKernelStat;\n'
+                                             '// Match the real 120-byte PS4 kernel stat ABI exactly. The public\n'
+                                             '// OpenOrbis typedef uses host dev_t/ino_t widths and is not ABI-safe here.\n'
+                                             'struct StatT {\n'
+                                             '  unsigned int st_dev;\n'
+                                             '  unsigned int st_ino;\n'
+                                             '  unsigned short st_mode;\n'
+                                             '  unsigned short st_nlink;\n'
+                                             '  unsigned int st_uid;\n'
+                                             '  unsigned int st_gid;\n'
+                                             '  unsigned int st_rdev;\n'
+                                             '  TimeSpec st_atim;\n'
+                                             '  TimeSpec st_mtim;\n'
+                                             '  TimeSpec st_ctim;\n'
+                                             '  long long st_size;\n'
+                                             '  long long st_blocks;\n'
+                                             '  unsigned int st_blksize;\n'
+                                             '  unsigned int st_flags;\n'
+                                             '  unsigned int st_gen;\n'
+                                             '  int st_lspare;\n'
+                                             '  TimeSpec st_birthtim;\n'
+                                             '};\n'
+                                             'static_assert(sizeof(StatT) == 120, "PS4 stat ABI size mismatch");\n'
                                              '#  else\n'
                                              'using StatT = struct stat;\n'
                                              '#  endif\n')]),
  'libcxx/src/filesystem/posix_compat.h': ('98d04aa7bbaad33100e4a44905e6d8dd8233d21055c7e854c78a262230d09ba8',
-                                            [('#  include <unistd.h>\n#endif\n#include <stdlib.h>\n',
-                                              '#  include <unistd.h>\n'
-                                              '#  if defined(PS4)\n'
-                                              '#    include <orbis/libkernel.h>\n'
-                                              '#  endif\n'
-                                              '#endif\n#include <stdlib.h>\n'),
+                                            [
                                              ('using ::fstat;\n'
                                               'using ::ftruncate;\n'
                                               'using ::getcwd;\n'
@@ -118,6 +127,10 @@ CHANGES = {'libcxx/include/__locale_dir/locale_base_api.h': ('c360e4d8315c264c11
                                               'using ::lstat;\n'
                                               'using ::mkdir;\n',
                                               '#  if defined(PS4)\n'
+                                              '// Declare only the two kernel imports we need against the exact StatT ABI.\n'
+                                              '// Default x86-64 target calling convention is the PS4 SysV ABI.\n'
+                                              'extern "C" int sceKernelStat(const char*, StatT*);\n'
+                                              'extern "C" int sceKernelFstat(int, StatT*);\n'
                                               'inline int __orbis_stat_result(int result) {\n'
                                               '  if (result >= 0)\n'
                                               '    return result;\n'
