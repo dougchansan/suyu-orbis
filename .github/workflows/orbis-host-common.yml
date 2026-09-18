@@ -1,0 +1,129 @@
+name: Native Orbis Suyu Common components
+on:
+  push:
+    branches: [full-core-linux-smoke]
+    paths:
+      - '.github/workflows/orbis-host-common.yml'
+      - 'experiments/orbis_host_common/**'
+      - 'platform/orbis/common/**'
+      - 'scripts/prepare_orbis_common.py'
+      - 'scripts/audit_orbis_cxx.py'
+      - 'scripts/ci/run_orbis_host_common.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: orbis-host-common-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host-common:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: dougchansan/suyu-v0.0.4
+          ref: e6f53df9f160903fd15ed2b0cd91ac60f1f43428
+          path: vendor/suyu
+          sparse-checkout: src/common
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: boostorg/context
+          ref: boost-1.83.0
+          path: vendor/context
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: fmtlib/fmt
+          ref: 12.1.0
+          path: vendor/fmt
+          persist-credentials: false
+      - name: Install host and emulator dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18 ninja-build \
+            libboost1.83-dev xvfb xauth python3-pil libvulkan1 mesa-vulkan-drivers \
+            libwayland-client0 libdecor-0-0 libxkbcommon0 libglfw3 libgles2 \
+            libasound2t64 libpulse0 libopenal1 libudev1 libxcursor1 libxi6 libxss1 \
+            libxtst6 libxrandr2 libxfixes3 unzip curl
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+          mkdir -p vendor/boost-headers
+          cp -a /usr/include/boost vendor/boost-headers/
+      - name: Compile and execute actual Common components on Linux
+        run: |
+          cmake -S experiments/orbis_host_common -B build/common-host -GNinja -DCMAKE_BUILD_TYPE=Release \
+            -DSO_SUYU_SOURCE="$PWD/vendor/suyu" -DSO_BOOST_HEADERS="$PWD/vendor/boost-headers" \
+            -DSO_BOOST_CONTEXT="$PWD/vendor/context" -DSO_FMT_SOURCE="$PWD/vendor/fmt"
+          cmake --build build/common-host --parallel 2
+          ctest --test-dir build/common-host --output-on-failure
+      - name: Fetch checksum-verified OpenOrbis SDK and shadPS4
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/orbis-tools/sdk" "$RUNNER_TEMP/orbis-tools/shad"
+          curl --fail --location --retry 3 https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/toolchain-llvm-18.2.zip -o "$RUNNER_TEMP/orbis-tools/sdk.zip"
+          echo "5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f  $RUNNER_TEMP/orbis-tools/sdk.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/orbis-tools/sdk.zip" -d "$RUNNER_TEMP/orbis-tools/sdk"
+          mapfile -t TAR < <(find "$RUNNER_TEMP/orbis-tools/sdk" -name 'toolchain-llvm-*.tar.gz')
+          test "${#TAR[@]}" -eq 1
+          tar -xzf "${TAR[0]}" -C "$RUNNER_TEMP/orbis-tools/sdk"
+          mapfile -t CRT < <(find "$RUNNER_TEMP/orbis-tools/sdk" -path '*/lib/crt1.o')
+          test "${#CRT[@]}" -eq 1
+          SDK="${CRT[0]%/lib/crt1.o}"
+          chmod +x "$SDK/bin/linux/create-fself"
+          echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
+          curl --fail --location --retry 3 https://github.com/shadps4-emu/shadPS4/releases/download/v.0.18.0/shadps4-linux-sdl-0.18.0.zip -o "$RUNNER_TEMP/orbis-tools/shad.zip"
+          echo "3cf0f669c089411775a2434a41ca9c391fb7d24c1a1521ee45dd1d36f390c4a4  $RUNNER_TEMP/orbis-tools/shad.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/orbis-tools/shad.zip" -d "$RUNNER_TEMP/orbis-tools/shad"
+          mapfile -t APP < <(find "$RUNNER_TEMP/orbis-tools/shad" -iname '*.appimage')
+          test "${#APP[@]}" -eq 1
+          chmod +x "${APP[0]}"
+          echo "SHADPS4_BIN=${APP[0]}" >> "$GITHUB_ENV"
+      - name: Record real full-core C++20 compatibility gaps
+        run: |
+          python3 scripts/audit_orbis_cxx.py --suyu vendor/suyu --output build/cxx-audit
+          # The audit reports missing features. Do not equate this step's exit
+          # status with full_core_build_ready, which is a separate JSON field.
+      - name: Cross-build actual Common components for Orbis
+        run: |
+          cmake -S experiments/orbis_host_common -B build/common-orbis -GNinja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchains/openorbis.cmake" \
+            -DSO_SUYU_SOURCE="$PWD/vendor/suyu" -DSO_BOOST_HEADERS="$PWD/vendor/boost-headers" \
+            -DSO_BOOST_CONTEXT="$PWD/vendor/context" -DSO_FMT_SOURCE="$PWD/vendor/fmt"
+          cmake --build build/common-orbis --parallel 2
+          test -s build/common-orbis/suyu-orbis-host-common.oelf
+          python3 scripts/audit_binary.py build/common-orbis/suyu-orbis-host-common.elf
+          llvm-nm -C build/common-orbis/suyu-orbis-host-common.elf > build/common-orbis/symbols.txt
+          grep -E 'Common::Fiber::YieldTo|sceKernel(MapDirectMemory|AllocateDirectMemory)|sceKernelGetProcessTimeCounter' build/common-orbis/symbols.txt
+      - name: Prepare disposable runner for guest low-address reservation
+        run: |
+          echo "ORIGINAL_MMAP_MIN=$(sysctl -n vm.mmap_min_addr)" >> "$GITHUB_ENV"
+          sudo sysctl -w vm.mmap_min_addr=0
+          LVP=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
+          test -n "$LVP"
+          echo "VK_ICD_FILENAMES=$LVP" >> "$GITHUB_ENV"
+      - name: Execute Orbis components in unmodified shadPS4
+        run: |
+          python3 scripts/ci/run_orbis_host_common.py --emulator "$SHADPS4_BIN" \
+            --executable build/common-orbis/suyu-orbis-host-common.oelf \
+            --output build/orbis-common-evidence
+      - name: Restore disposable runner mapping policy
+        if: always()
+        run: |
+          if test -n "${ORIGINAL_MMAP_MIN:-}"; then sudo sysctl -w "vm.mmap_min_addr=$ORIGINAL_MMAP_MIN"; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orbis-common-${{ github.sha }}
+          path: |
+            build/orbis-common-evidence/
+            build/cxx-audit/
+            build/common-orbis/suyu-orbis-host-common.elf
+            build/common-orbis/suyu-orbis-host-common.oelf
+            build/common-orbis/eboot.bin
+            build/common-orbis/symbols.txt
+            build/common-host/Testing/Temporary/LastTest.log
+          retention-days: 14
