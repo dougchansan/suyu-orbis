@@ -63,7 +63,29 @@ CHANGES = {'libcxx/include/__locale_dir/locale_base_api.h': ('c360e4d8315c264c11
                                        '#  if (defined(__APPLE__) || defined(__FreeBSD__)) && '
                                        '!_LIBCPP_HAS_MUSL_LIBC\n'
                                        '#    define _LIBCPP_WCTYPE_IS_MASK\n')]),
- 'libcxx/src/filesystem/operations.cpp': ('c2ff243df7206f32aaffed77ed18e1b5a0cf96ecb641bfe65dd935adea52b6e8',
+ 'libcxx/src/chrono.cpp': ('9f5acabff11905fd20100c6fb7afa3450b1e9dc5b2279302a5a544e55defe361',
+                           [('#include "include/apple_availability.h"\n#include <time.h> // clock_gettime and CLOCK_{MONOTONIC,REALTIME,MONOTONIC_RAW}\n',
+                             '#include "include/apple_availability.h"\n'
+                             '#if defined(PS4)\n'
+                             '#  include <orbis/libkernel.h>\n'
+                             '#endif\n'
+                             '#include <time.h> // clock_gettime and CLOCK_{MONOTONIC,REALTIME,MONOTONIC_RAW}\n'),
+                            ('#  if defined(__APPLE__)\n',
+                             '#  if defined(PS4)\n'
+                             '// OpenOrbis exposes a process-time counter with an explicit frequency.\n'
+                             '// Use it directly instead of relying on the FreeBSD ABI clock-id values.\n'
+                             'static steady_clock::time_point __libcpp_steady_clock_now() {\n'
+                             '  const auto frequency = sceKernelGetProcessTimeCounterFrequency();\n'
+                             '  const auto counter = sceKernelGetProcessTimeCounter();\n'
+                             '  if (frequency == 0)\n'
+                             '    __throw_system_error(EINVAL, "sceKernelGetProcessTimeCounterFrequency returned zero");\n'
+                             '  constexpr auto __ns_per_second = 1000000000ULL;\n'
+                             '  const auto whole = counter / frequency;\n'
+                             '  const auto fraction = counter % frequency;\n'
+                             '  const auto ns = whole * __ns_per_second + fraction * __ns_per_second / frequency;\n'
+                             '  return steady_clock::time_point(nanoseconds(static_cast<nanoseconds::rep>(ns)));\n'
+                             '}\n\n'
+                             '#  elif defined(__APPLE__)\n')]),\n 'libcxx/src/filesystem/operations.cpp': ('c2ff243df7206f32aaffed77ed18e1b5a0cf96ecb641bfe65dd935adea52b6e8',
                                           [('#elif defined(__FreeBSD__)\n',
                                             '#elif defined(__FreeBSD__) && !defined(PS4)\n'),
                                            ('#if __has_include(<sys/sendfile.h>)\n',
