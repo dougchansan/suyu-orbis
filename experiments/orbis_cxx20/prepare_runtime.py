@@ -87,8 +87,8 @@ CHANGES = {'libcxx/include/__locale_dir/locale_base_api.h': ('c360e4d8315c264c11
                              '}\n\n'
                              '#  elif defined(__APPLE__)\n')]),
  'libcxx/src/filesystem/time_utils.h': ('b264875005a9a897e6b547d579959e7c9e808528dc3841efd9ffaaf488a4bf0d',
-                                           [('#  include <unistd.h>\n#endif\n',
-                                             '#  include <unistd.h>\n'
+                                           [('#  include <sys/time.h> // for ::utimes as used in __last_write_time\n#endif\n',
+                                             '#  include <sys/time.h> // for ::utimes as used in __last_write_time\n'
                                              '#  if defined(PS4)\n'
                                              '#    include <orbis/libkernel.h>\n'
                                              '#  endif\n'
