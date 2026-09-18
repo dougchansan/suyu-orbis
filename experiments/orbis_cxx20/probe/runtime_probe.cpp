@@ -186,7 +186,13 @@ void Files() {
     fs::rename(dir/"a.txt", dir/"b.txt");
     std::string line;
     { std::ifstream input(dir/"b.txt"); std::getline(input, line); }
-    Require(line == "orbis-cxx20" && fs::file_size(dir/"b.txt") == 12, "rename/read/stat");
+    Require(line == "orbis-cxx20", "rename/read");
+    std::error_code size_error;
+    const auto size = fs::file_size(dir/"b.txt", size_error);
+    std::fprintf(stdout, "[cxx20] filesystem size=%llu ec=%d line_len=%zu\n",
+                 static_cast<unsigned long long>(size), size_error.value(), line.size());
+    std::fflush(stdout);
+    Require(!size_error && size == 12, "file_size");
     Require(fs::remove(dir/"b.txt") && fs::remove(dir), "file/directory removal");
     Stage("random_device_reads");
     std::random_device random;
