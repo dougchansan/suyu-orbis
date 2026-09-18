@@ -37,8 +37,14 @@ target_link_libraries(orbis_host_common PUBLIC fmt::fmt)
 # Test the SAME upstream no-fastmem fallback on both platforms. It is an
 # explicit backing-memory test, not proof of guest permission/alias behavior.
 target_compile_definitions(orbis_host_common PUBLIC __OPENORBIS__=1 BOOST_CONTEXT_NO_LIB=1)
+# TLS reads must run on the current host thread, not retain an address hoisted
+# across a fiber yield. A separate native object remains opaque even when the
+# surrounding executable later enables interprocedural optimization.
+add_library(orbis_test_thread_identity STATIC thread_identity.cpp)
+set_target_properties(orbis_test_thread_identity PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
+target_compile_options(orbis_test_thread_identity PRIVATE -fno-lto -Wall -Wextra -Wpedantic -Werror)
 add_executable(suyu-orbis-host-common host_common_tests.cpp)
-target_link_libraries(suyu-orbis-host-common PRIVATE orbis_host_common)
+target_link_libraries(suyu-orbis-host-common PRIVATE orbis_host_common orbis_test_thread_identity)
 target_compile_options(suyu-orbis-host-common PRIVATE -Wall -Wextra -Wpedantic -Werror)
 if(SO_PLATFORM_ORBIS)
     target_sources(orbis_host_common PRIVATE "${SO_ROOT}/platform/orbis/common/fenv_rounding.cpp")

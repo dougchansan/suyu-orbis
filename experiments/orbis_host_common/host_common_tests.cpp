@@ -5,6 +5,7 @@
 #include "common/steady_clock.h"
 #include "common/virtual_buffer.h"
 #include "host_support.h"
+#include "thread_identity.h"
 #include <array>
 #include <atomic>
 #include <cfenv>
@@ -37,7 +38,9 @@ void Stage(const char* name) {
     }
 #endif
 }
-thread_local unsigned tls_cookie=0;
+using SuyuOrbis::HostTest::ReadThreadIdentity;
+using SuyuOrbis::HostTest::SetThreadCookie;
+using SuyuOrbis::HostTest::ThreadIdentity;
 void Pages() {
     Stage("real_virtual_buffer");
     using SuyuOrbis::Host::GetPageStats;
@@ -104,7 +107,7 @@ void Threads() {
     unsigned ready=0, count=0, once_count=0;bool go=false;
     std::array<std::thread,2> workers;
     for (unsigned n=0;n<workers.size();++n) workers[n]=std::thread([&,n]{
-        tls_cookie=100+n;
+        SetThreadCookie(100+n);
         std::call_once(once,[&]{++once_count;});
         {
             std::unique_lock lock(mutex);
@@ -113,7 +116,7 @@ void Threads() {
         }
         for (unsigned i=0;i<1024;++i) {
             std::lock_guard lock(mutex);
-            ++count;Require(tls_cookie==100+n,"host thread TLS isolation");
+            ++count;Require(ReadThreadIdentity().cookie==100+n,"host thread TLS isolation");
         }
     });
     {
@@ -122,7 +125,7 @@ void Threads() {
         go=true;cv.notify_all();
     }
     for (auto& t:workers) t.join();
-    Require(count==2048 && once_count==1 && tls_cookie==0,"thread joins, mutex and call_once");
+    Require(count==2048 && once_count==1 && ReadThreadIdentity().cookie==0,"thread joins, mutex and call_once");
     std::recursive_mutex recursive;
     recursive.lock();Require(recursive.try_lock(),"recursive mutex");recursive.unlock();recursive.unlock();
 }
@@ -178,31 +181,46 @@ unsigned Migration() {
     using Common::Fiber;
     std::mutex mutex;std::condition_variable cv;
     unsigned turn=0, hops=0;
+    std::array<ThreadIdentity,2> identities{};
     std::shared_ptr<Fiber> destination;
     std::shared_ptr<Fiber> fiber;
     fiber=std::make_shared<Fiber>([&]{
         volatile std::uint64_t sentinel=UINT64_C(0xabcdef9876543210);
+        Require(std::fesetround(FE_DOWNWARD)==0,"migrating fiber FP mode");
         while (true) {
             Require(sentinel==UINT64_C(0xabcdef9876543210),"migrated fiber stack");
-            Require(tls_cookie==200+turn,"migrated fiber uses current host TLS");
+            // Re-read through a separate non-LTO function on every resume.
+            // TLS pointers from the old worker are compared only, never used.
+            const auto current=ReadThreadIdentity();
+            Require(current.cookie==200+turn,"migrated fiber uses current host TLS");
+            Require(current.storage==identities[turn].storage,"migrated fiber reads current TLS storage");
+            Require(RoundingMatches(FE_DOWNWARD),"migrating fiber preserves x87/SSE mode");
             Fiber::YieldTo(fiber,*destination);
         }
     });
     std::array<std::thread,2> workers;
     for (unsigned n=0;n<2;++n) workers[n]=std::thread([&,n]{
-        tls_cookie=200+n;
+        SetThreadCookie(200+n);
+        const int saved=std::fegetround();
+        const int mode=n ? FE_UPWARD : FE_TOWARDZERO;
+        Require(std::fesetround(mode)==0,"migration root FP mode");
         auto root=Fiber::ThreadToFiber();
         while (true) {
             std::unique_lock lock(mutex);
             cv.wait(lock,[&]{return hops==32 || turn==n;});
             if (hops==32) break;
+            identities[n]=ReadThreadIdentity();
             destination=root;
             Fiber::YieldTo(root,*fiber);
+            Require(ReadThreadIdentity().cookie==200+n && RoundingMatches(mode),"migration restores root TLS and FP mode");
             ++hops;turn=1-n;cv.notify_all();
         }
         root->Exit();
+        Require(std::fesetround(saved)==0,"restore worker FP mode");
     });
     for (auto& worker:workers) worker.join();
+    Require(identities[0].storage!=identities[1].storage,"two distinct worker TLS slots");
+    Require(ReadThreadIdentity().cookie==0,"migration does not modify main TLS");
     destination.reset();fiber.reset();
     Require(hops==32,"fiber migrated 32 times without simultaneous execution");
     return hops;
@@ -229,6 +247,7 @@ int main() {
         "{\"test\":\"real_suyu_common_host_adaptation\",\"passed\":true,\"checks\":%u,\"orbis_apis\":%s,"
         "\"fiber_roundtrips\":%u,\"cross_thread_hops\":%u,\"sleep_ns\":%llu,"
         "\"live_page_allocations\":%llu,\"full_core_linked\":false,"
+        "\"tls_access\":\"out_of_line_no_lto\",\"tls_distinct_slots\":true,\"migration_fp_state\":true,"
         "\"scheduler_dispatch\":false,\"guest_fastmem\":false,\"game_tested\":false}\n",
         checks.load(),OrbisApis,trips,hops,static_cast<unsigned long long>(slept),
         static_cast<unsigned long long>(pages.live_allocations));
