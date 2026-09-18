@@ -1,0 +1,98 @@
+name: Orbis C++20 runtime build experiment
+on:
+  push:
+    branches: [full-core-linux-smoke]
+    paths: ['.github/workflows/orbis-cxx20.yml', 'experiments/orbis_cxx20/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: orbis-cxx20-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  runtime-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
+          path: vendor/llvm-project
+          sparse-checkout: |
+            cmake
+            runtimes
+            libcxx
+            libcxxabi
+            libunwind
+            llvm/cmake
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-18 lld-18 llvm-18 ninja-build unzip curl
+          echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"
+      - name: Fetch public OpenOrbis SDK without changing it
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cxx-sdk" build/cxx-evidence
+          curl --fail --location --retry 3 https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/toolchain-llvm-18.2.zip -o "$RUNNER_TEMP/cxx-sdk.zip"
+          echo "5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f  $RUNNER_TEMP/cxx-sdk.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/cxx-sdk.zip" -d "$RUNNER_TEMP/cxx-sdk"
+          mapfile -t TAR < <(find "$RUNNER_TEMP/cxx-sdk" -name 'toolchain-llvm-*.tar.gz')
+          test "${#TAR[@]}" -eq 1
+          tar -xzf "${TAR[0]}" -C "$RUNNER_TEMP/cxx-sdk"
+          mapfile -t CRT < <(find "$RUNNER_TEMP/cxx-sdk" -path '*/lib/crt1.o')
+          test "${#CRT[@]}" -eq 1
+          SDK="${CRT[0]%/lib/crt1.o}"
+          chmod +x "$SDK/bin/linux/create-fself"
+          echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
+          ls -l "$SDK/lib" > build/cxx-evidence/sdk-libraries.txt
+          git -C vendor/llvm-project rev-parse HEAD > build/cxx-evidence/llvm-revision.txt
+      - name: Configure isolated LLVM C++ runtimes for Orbis
+        run: |
+          set -euo pipefail
+          cmake -S vendor/llvm-project/runtimes -B build/cxx-runtime -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/experiments/orbis_cxx20/toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_INSTALL_PREFIX="$PWD/build/cxx-prefix" \
+            -DLLVM_ENABLE_RUNTIMES='libunwind;libcxxabi;libcxx' \
+            -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF -DLLVM_INCLUDE_TESTS=OFF \
+            -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF \
+            -DLIBCXX_ENABLE_SHARED=OFF -DLIBCXX_ENABLE_STATIC=ON \
+            -DLIBCXX_ENABLE_EXCEPTIONS=ON -DLIBCXX_ENABLE_RTTI=ON \
+            -DLIBCXX_ENABLE_THREADS=ON -DLIBCXX_HAS_PTHREAD_API=ON \
+            -DLIBCXX_HAS_MUSL_LIBC=ON -DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF \
+            -DLIBCXXABI_ENABLE_SHARED=OFF -DLIBCXXABI_ENABLE_STATIC=ON \
+            -DLIBCXXABI_USE_LLVM_UNWINDER=ON -DLIBCXXABI_INCLUDE_TESTS=OFF \
+            -DLIBUNWIND_ENABLE_SHARED=OFF -DLIBUNWIND_ENABLE_STATIC=ON \
+            -DLIBUNWIND_INCLUDE_TESTS=OFF \
+            2>&1 | tee build/cxx-evidence/configure.log
+      - name: Build and install isolated runtime archives
+        run: |
+          set -euo pipefail
+          cmake --build build/cxx-runtime --parallel 2 2>&1 | tee build/cxx-evidence/build.log
+          cmake --install build/cxx-runtime 2>&1 | tee build/cxx-evidence/install.log
+          find build/cxx-prefix -type f -name '*.a' -exec sha256sum {} \; > build/cxx-evidence/archive-hashes.txt
+          test -s build/cxx-evidence/archive-hashes.txt
+          printf '%s\n' 'Build-only result. No Orbis runtime, full core, or game claim.' > build/cxx-evidence/SCOPE.txt
+      - name: Preserve exact build inputs and diagnostics
+        if: always()
+        run: |
+          mkdir -p build/cxx-evidence
+          git archive HEAD > build/cxx-evidence/project-source.tar
+          cp build/cxx-runtime/CMakeCache.txt build/cxx-evidence/ 2>/dev/null || true
+          cp build/cxx-runtime/compile_commands.json build/cxx-evidence/ 2>/dev/null || true
+          cp build/cxx-runtime/CMakeFiles/CMakeConfigureLog.yaml build/cxx-evidence/ 2>/dev/null || true
+          tar --exclude=.git --exclude=test --exclude=tests -czf build/cxx-evidence/llvm-runtime-sources.tar.gz \
+            -C vendor/llvm-project cmake runtimes libcxx libcxxabi libunwind llvm/cmake
+          if test -d build/cxx-prefix; then tar -czf build/cxx-evidence/runtime-prefix.tar.gz -C build cxx-prefix; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orbis-cxx20-build-${{ github.sha }}
+          path: build/cxx-evidence/
+          retention-days: 7
