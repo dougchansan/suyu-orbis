@@ -80,8 +80,14 @@ def main() -> int:
                 time.sleep(0.1)
             if report is None:
                 stage = data/'orbis-cxx20-stage.txt'
-                raise RuntimeError('No completed report; last stage: '+
-                                   (stage.read_text() if stage.exists() else 'before guest entry'))
+                detail = 'last stage: '+(stage.read_text() if stage.exists() else 'before guest entry')
+                log_path = out/'shadps4.log'
+                if log_path.exists():
+                    failures = [line.strip() for line in log_path.read_text(errors='replace').splitlines()
+                                if 'FAIL [' in line]
+                    if failures:
+                        detail += '; guest failure: '+failures[-1]
+                raise RuntimeError('No completed report; '+detail)
             validate(report)
             result = {'passed':True, 'environment':'shadPS4_on_Linux',
                 'physical_ps4_tested':False, 'source_commit':os.environ.get('GITHUB_SHA'),
