@@ -52,6 +52,8 @@ def main()->int:
             deadline=time.monotonic()+90
             report=None
             while time.monotonic()<deadline:
+                failure=data/'orbis-host-failure.txt'
+                if failure.exists():raise RuntimeError('Guest assertion: '+failure.read_text())
                 path=data/'orbis-host-common.json'
                 if path.exists():
                     report=json.loads(path.read_text());break

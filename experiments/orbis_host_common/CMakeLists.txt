@@ -41,6 +41,9 @@ add_executable(suyu-orbis-host-common host_common_tests.cpp)
 target_link_libraries(suyu-orbis-host-common PRIVATE orbis_host_common)
 target_compile_options(suyu-orbis-host-common PRIVATE -Wall -Wextra -Wpedantic -Werror)
 if(SO_PLATFORM_ORBIS)
+    target_sources(orbis_host_common PRIVATE "${SO_ROOT}/platform/orbis/common/fenv_rounding.cpp")
+    # Direct LLD link: these are linker arguments, not -Wl driver arguments.
+    target_link_options(orbis_host_common INTERFACE --wrap=fegetround --wrap=fesetround)
     target_compile_definitions(orbis_host_common PUBLIC SO_PLATFORM_ORBIS=1 PS4=1)
     set_target_properties(suyu-orbis-host-common PROPERTIES SUFFIX ".elf")
     find_program(FSELF NAMES create-fself create-fself-macos

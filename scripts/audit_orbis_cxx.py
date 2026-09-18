@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse, json, os, re, subprocess
 from pathlib import Path
 CASES={
+    'toolchain_baseline':'#include <vector>\n#include <thread>\n#include <mutex>\nvoid f(){std::vector<int> v{1};std::mutex m;std::lock_guard<std::mutex> l(m);(void)v;}\n',
     'stop_token':'#include <stop_token>\nstd::stop_source source;\n',
     'jthread':'#include <thread>\nvoid f(){std::jthread t([]{});}\n',
     'stop_aware_condition_variable':'#include <thread>\n#include <condition_variable>\nvoid f(std::stop_token st){ std::mutex m; std::unique_lock lock(m); std::condition_variable_any cv; cv.wait(lock,st,[]{return true;});}\n',
@@ -40,8 +41,9 @@ def main()->int:
         (out/(name+'.log')).write_text(r.stdout+r.stderr)
         results.append({'feature':name,'available':r.returncode==0,'returncode':r.returncode})
     report={'scope':'compile_only_CXX20_requirements','sdk_libcpp_version':int(version[1]) if version else None,
-            'full_core_build_ready':all(r['available'] for r in results),
+            'examined_cxx_requirements_passed':all(r['available'] for r in results),
+            'full_core_build_ready':False,
             'native_runtime_tested':False,'results':results}
     (out/'cxx-capabilities.json').write_text(json.dumps(report,indent=2)+'\n')
-    print(json.dumps(report,indent=2));return 0
+    print(json.dumps(report,indent=2));return 0 if results[0]['available'] else 2
 if __name__=='__main__':raise SystemExit(main())

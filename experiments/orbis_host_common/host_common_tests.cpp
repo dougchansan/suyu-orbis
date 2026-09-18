@@ -17,6 +17,7 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include <xmmintrin.h>
 #ifdef SO_PLATFORM_ORBIS
 #include <orbis/libkernel.h>
 #endif
@@ -125,6 +126,27 @@ void Threads() {
     std::recursive_mutex recursive;
     recursive.lock();Require(recursive.try_lock(),"recursive mutex");recursive.unlock();recursive.unlock();
 }
+bool RoundingMatches(int direction) {
+    std::uint16_t cw;
+    asm volatile("fnstcw %0" : "=m"(cw));
+    const auto csr=_mm_getcsr();
+    return std::fegetround()==direction && (cw & 0xc00)==direction &&
+           static_cast<int>((csr >> 3) & 0xc00)==direction;
+}
+void Rounding() {
+    Stage("native_floating_point_rounding");
+    const int saved=std::fegetround();
+    const double input=1.5;
+    for (int direction : {FE_TONEAREST,FE_DOWNWARD,FE_UPWARD,FE_TOWARDZERO}) {
+        Require(std::fesetround(direction)==0 && RoundingMatches(direction),"actual x87 and SSE rounding controls");
+        int converted;
+        asm volatile("cvtsd2si %1, %0" : "=r"(converted) : "x"(input));
+        const int expected=(direction==FE_DOWNWARD || direction==FE_TOWARDZERO)?1:2;
+        Require(converted==expected,"SSE instruction obeys rounding mode");
+        Require(std::fesetround(123)!=0 && RoundingMatches(direction),"invalid rounding mode leaves state intact");
+    }
+    Require(std::fesetround(saved)==0 && RoundingMatches(saved),"restore initial rounding state");
+}
 unsigned Fibers() {
     Stage("real_common_fiber_roundtrip");
     using Common::Fiber;
@@ -139,14 +161,14 @@ unsigned Fibers() {
         Require(std::fesetround(FE_DOWNWARD)==0,"fiber floating-point mode");
         for (unsigned step=0;step<4096;++step) {
             for (unsigned i=0;i<16;++i) Require(canary[i]==(UINT64_C(0x8123456789abcdef)^i),"fiber stack preserved");
-            Require(std::fegetround()==FE_DOWNWARD,"fiber FP state preserved");
+            Require(RoundingMatches(FE_DOWNWARD),"fiber FP state preserved");
             ++trips;Fiber::YieldTo(fiber,*root);
         }
         SuyuOrbis::Host::Fatal("unexpected return/resume past final fiber yield");
     });
     for (unsigned i=0;i<4096;++i) {
         Fiber::YieldTo(root,*fiber);
-        Require(trips==i+1 && std::fegetround()==FE_UPWARD,"root state restored");
+        Require(trips==i+1 && RoundingMatches(FE_UPWARD),"root state restored");
     }
     fiber.reset();root->Exit();root.reset();std::fesetround(rounding);
     return trips;
@@ -191,6 +213,7 @@ int main() {
     Pages();
     const auto slept=Clocks();
     Threads();
+    Rounding();
     const auto trips=Fibers();
     const auto hops=Migration();
     const auto pages=SuyuOrbis::Host::GetPageStats();

@@ -10,7 +10,16 @@ namespace SuyuOrbis::Host {
 [[noreturn]] void Fatal(const char* what,int rc) noexcept {
     std::fprintf(stderr,"[orbis-host] fatal: %s (%d / %#x)\n",what,rc,static_cast<unsigned>(rc));
     std::fflush(stderr);
+#ifdef SO_PLATFORM_ORBIS
+    if (FILE* out=std::fopen("/data/orbis-host-failure.txt","w")) {
+        std::fprintf(out,"%s (%d / %#x)\n",what,rc,static_cast<unsigned>(rc));
+        std::fclose(out);
+    }
+    // The emulator's fallback raise() can return, so terminate through UD2.
+    __builtin_trap();
+#else
     std::abort();
+#endif
 }
 }
 void AssertFailSoftImpl() { SuyuOrbis::Host::Fatal("Suyu assertion failed"); }
