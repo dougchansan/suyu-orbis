@@ -86,6 +86,71 @@ CHANGES = {'libcxx/include/__locale_dir/locale_base_api.h': ('c360e4d8315c264c11
                              '  return steady_clock::time_point(nanoseconds(static_cast<nanoseconds::rep>(ns)));\n'
                              '}\n\n'
                              '#  elif defined(__APPLE__)\n')]),
+ 'libcxx/src/filesystem/time_utils.h': ('b264875005a9a897e6b547d579959e7c9e808528dc3841efd9ffaaf488a4bf0d',
+                                           [('#  include <unistd.h>\n#endif\n',
+                                             '#  include <unistd.h>\n'
+                                             '#  if defined(PS4)\n'
+                                             '#    include <orbis/libkernel.h>\n'
+                                             '#  endif\n'
+                                             '#endif\n'),
+                                            ('using TimeSpec = struct timespec;\n'
+                                             'using TimeVal  = struct timeval;\n'
+                                             'using StatT    = struct stat;\n',
+                                             'using TimeSpec = struct timespec;\n'
+                                             'using TimeVal  = struct timeval;\n'
+                                             '#  if defined(PS4)\n'
+                                             '// PS4 kernel stat layout is not the generic musl/FreeBSD host layout.\n'
+                                             'using StatT = OrbisKernelStat;\n'
+                                             '#  else\n'
+                                             'using StatT = struct stat;\n'
+                                             '#  endif\n')]),
+ 'libcxx/src/filesystem/posix_compat.h': ('98d04aa7bbaad33100e4a44905e6d8dd8233d21055c7e854c78a262230d09ba8',
+                                            [('#  include <unistd.h>\n#endif\n#include <stdlib.h>\n',
+                                              '#  include <unistd.h>\n'
+                                              '#  if defined(PS4)\n'
+                                              '#    include <orbis/libkernel.h>\n'
+                                              '#  endif\n'
+                                              '#endif\n#include <stdlib.h>\n'),
+                                             ('using ::fstat;\n'
+                                              'using ::ftruncate;\n'
+                                              'using ::getcwd;\n'
+                                              'using ::link;\n'
+                                              'using ::lstat;\n'
+                                              'using ::mkdir;\n',
+                                              '#  if defined(PS4)\n'
+                                              'inline int __orbis_stat_result(int result) {\n'
+                                              '  if (result >= 0)\n'
+                                              '    return result;\n'
+                                              '  errno = static_cast<int>(static_cast<unsigned>(result) & 0xffffu);\n'
+                                              '  if (errno == 0)\n'
+                                              '    errno = EIO;\n'
+                                              '  return -1;\n'
+                                              '}\n'
+                                              'inline int stat(const char* path, StatT* buf) {\n'
+                                              '  return __orbis_stat_result(sceKernelStat(path, buf));\n'
+                                              '}\n'
+                                              'inline int fstat(int fd, StatT* buf) {\n'
+                                              '  return __orbis_stat_result(sceKernelFstat(fd, buf));\n'
+                                              '}\n'
+                                              '// Public OpenOrbis/shadPS4 does not provide a working lstat import.\n'
+                                              '// Preserve target-stat behavior for regular files/directories; symlink\n'
+                                              '// metadata remains an explicit unvalidated platform capability.\n'
+                                              'inline int lstat(const char* path, StatT* buf) { return stat(path, buf); }\n'
+                                              '#  else\n'
+                                              'using ::fstat;\n'
+                                              'using ::lstat;\n'
+                                              'using ::stat;\n'
+                                              '#  endif\n'
+                                              'using ::ftruncate;\n'
+                                              'using ::getcwd;\n'
+                                              'using ::link;\n'
+                                              'using ::mkdir;\n'),
+                                             ('using ::stat;\n'
+                                              'using ::statvfs;\n',
+                                              '#  if !defined(PS4)\n'
+                                              'using ::stat;\n'
+                                              '#  endif\n'
+                                              'using ::statvfs;\n')]),
  'libcxx/src/filesystem/operations.cpp': ('c2ff243df7206f32aaffed77ed18e1b5a0cf96ecb641bfe65dd935adea52b6e8',
                                           [('#elif defined(__FreeBSD__)\n',
                                             '#elif defined(__FreeBSD__) && !defined(PS4)\n'),
