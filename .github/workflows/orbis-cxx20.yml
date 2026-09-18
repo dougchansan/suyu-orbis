@@ -56,6 +56,10 @@ jobs:
       - name: Verify target library availability with real ELF links
         run: |
           python3 experiments/orbis_cxx20/probe_sdk_libraries.py --output build/cxx-evidence/sdk-probes
+      - name: Select musl locale and conservative atomic wait for Orbis
+        run: |
+          python3 experiments/orbis_cxx20/prepare_runtime.py --source vendor/llvm-project
+          git -C vendor/llvm-project diff -- libcxx > build/cxx-evidence/llvm-orbis.patch
       - name: Configure isolated LLVM C++ runtimes for Orbis
         run: |
           set -euo pipefail
