@@ -1,0 +1,37 @@
+name: Orbis host adaptation inputs
+on:
+  push:
+    branches: [full-core-linux-smoke]
+    paths: ['.github/workflows/orbis-host-inputs.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Fetch checksum-verified public SDK and emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/openorbis inputs/shadps4
+          curl --fail --location --retry 3 https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/download/v0.5.3/toolchain-llvm-18.2.zip -o inputs/openorbis.zip
+          echo '5006bb8629a40093b712fac971456fa4d5ad3fafaadb16d11c10b8a93b8b496f  inputs/openorbis.zip' | sha256sum --check
+          unzip -q inputs/openorbis.zip -d inputs/openorbis
+          mapfile -t TAR < <(find inputs/openorbis -name 'toolchain-llvm-*.tar.gz' -type f)
+          test "${#TAR[@]}" -eq 1
+          tar -xzf "${TAR[0]}" -C inputs/openorbis
+          rm inputs/openorbis.zip "${TAR[0]}"
+          curl --fail --location --retry 3 https://github.com/shadps4-emu/shadPS4/releases/download/v.0.18.0/shadps4-linux-sdl-0.18.0.zip -o inputs/shadps4.zip
+          echo '3cf0f669c089411775a2434a41ca9c391fb7d24c1a1521ee45dd1d36f390c4a4  inputs/shadps4.zip' | sha256sum --check
+          unzip -q inputs/shadps4.zip -d inputs/shadps4
+          rm inputs/shadps4.zip
+          printf '%s\n' 'Public OpenOrbis v0.5.3 SDK and official shadPS4 v0.18.0.' 'Development inputs only, not execution evidence or a game release.' > inputs/README.txt
+          find inputs -maxdepth 4 -type f | sort | head -100
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orbis-host-development-inputs
+          path: inputs/
+          compression-level: 0
+          retention-days: 7
