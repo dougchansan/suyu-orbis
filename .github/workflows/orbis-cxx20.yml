@@ -26,6 +26,7 @@ jobs:
             cmake
             runtimes
             libcxx
+            libc
             libcxxabi
             libunwind
             llvm/cmake
@@ -52,10 +53,14 @@ jobs:
           echo "OO_PS4_TOOLCHAIN=$SDK" >> "$GITHUB_ENV"
           ls -l "$SDK/lib" > build/cxx-evidence/sdk-libraries.txt
           git -C vendor/llvm-project rev-parse HEAD > build/cxx-evidence/llvm-revision.txt
+      - name: Verify target library availability with real ELF links
+        run: |
+          python3 experiments/orbis_cxx20/probe_sdk_libraries.py --output build/cxx-evidence/sdk-probes
       - name: Configure isolated LLVM C++ runtimes for Orbis
         run: |
           set -euo pipefail
           cmake -S vendor/llvm-project/runtimes -B build/cxx-runtime -G Ninja \
+            -C "$PWD/build/cxx-evidence/sdk-probes/sdk-link-checks.cmake" \
             -DCMAKE_TOOLCHAIN_FILE="$PWD/experiments/orbis_cxx20/toolchain.cmake" \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DCMAKE_INSTALL_PREFIX="$PWD/build/cxx-prefix" \
@@ -88,7 +93,7 @@ jobs:
           cp build/cxx-runtime/compile_commands.json build/cxx-evidence/ 2>/dev/null || true
           cp build/cxx-runtime/CMakeFiles/CMakeConfigureLog.yaml build/cxx-evidence/ 2>/dev/null || true
           tar --exclude=.git --exclude=test --exclude=tests -czf build/cxx-evidence/llvm-runtime-sources.tar.gz \
-            -C vendor/llvm-project cmake runtimes libcxx libcxxabi libunwind llvm/cmake
+            -C vendor/llvm-project cmake runtimes libcxx libc libcxxabi libunwind llvm/cmake
           if test -d build/cxx-prefix; then tar -czf build/cxx-evidence/runtime-prefix.tar.gz -C build cxx-prefix; fi
       - uses: actions/upload-artifact@v4
         if: always()
