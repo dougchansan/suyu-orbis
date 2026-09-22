@@ -2,7 +2,7 @@ name: Orbis C++20 runtime validation
 on:
   push:
     branches: [full-core-linux-smoke]
-    paths: ['.github/workflows/orbis-cxx20.yml', 'experiments/orbis_cxx20/**', 'experiments/orbis_host_common/**', 'platform/orbis/common/**', 'scripts/ci/run_orbis_host_common.py']
+    paths: ['.github/workflows/orbis-cxx20.yml', 'experiments/orbis_cxx20/**', 'experiments/orbis_core_compile/**', 'experiments/orbis_host_common/**', 'platform/orbis/common/**', 'scripts/ci/run_orbis_host_common.py']
   workflow_dispatch:
 permissions:
   contents: read
@@ -129,7 +129,7 @@ jobs:
           repository: dougchansan/suyu-v0.0.4
           ref: e6f53df9f160903fd15ed2b0cd91ac60f1f43428
           path: vendor/suyu
-          sparse-checkout: src/common
+          sparse-checkout: src
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
@@ -160,6 +160,30 @@ jobs:
           python3 scripts/ci/run_orbis_host_common.py --emulator "$SHADPS4_BIN" \
             --executable build/common-modern-orbis/suyu-orbis-host-common.oelf \
             --output build/cxx-evidence/native-common
+      - uses: actions/checkout@v4
+        with:
+          repository: martinus/unordered_dense
+          ref: 7b55cab8418da1603496462ce3ccdb4cb1dc3368
+          path: vendor/unordered_dense
+          persist-credentials: false
+      - name: Compile real no-JIT kernel objects (not full-core execution)
+        run: |
+          set -euo pipefail
+          mkdir -p build/cxx-evidence/core-compile
+          python3 -m unittest discover -s experiments/orbis_core_compile -p 'test_*.py' -v
+          cmake -S experiments/orbis_core_compile -B build/kernel-orbis -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$PWD/experiments/orbis_cxx20/consumer_toolchain.cmake" \
+            -DSO_CXX_PREFIX="$PWD/build/cxx-prefix" -DSO_ORBIS_C_OVERLAY="$PWD/build/c-header-overlay" \
+            -DSO_SUYU_SOURCE="$PWD/vendor/suyu" -DSO_BOOST_HEADERS="$PWD/vendor/boost-headers" \
+            -DSO_FMT_SOURCE="$PWD/vendor/fmt" -DSO_UNORDERED_SOURCE="$PWD/vendor/unordered_dense" \
+            2>&1 | tee build/cxx-evidence/core-compile/configure.log
+          cmake --build build/kernel-orbis --parallel 2 -- -k 0 \
+            2>&1 | tee build/cxx-evidence/core-compile/build.log
+          python3 experiments/orbis_core_compile/report_objects.py --build build/kernel-orbis \
+            --output build/cxx-evidence/core-compile/validation.json
+          cp build/kernel-orbis/compile_commands.json build/kernel-orbis/selected-sources.json \
+            build/cxx-evidence/core-compile/
       - name: Restore disposable runner mapping policy
         if: always()
         run: |
