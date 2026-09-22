@@ -2,7 +2,7 @@ name: Orbis C++20 runtime validation
 on:
   push:
     branches: [full-core-linux-smoke]
-    paths: ['.github/workflows/orbis-cxx20.yml', 'experiments/orbis_cxx20/**']
+    paths: ['.github/workflows/orbis-cxx20.yml', 'experiments/orbis_cxx20/**', 'experiments/orbis_host_common/**', 'platform/orbis/common/**', 'scripts/ci/run_orbis_host_common.py']
   workflow_dispatch:
 permissions:
   contents: read
@@ -61,12 +61,10 @@ jobs:
           python3 experiments/orbis_cxx20/prepare_sdk.py --sdk "$OO_PS4_TOOLCHAIN" --output build/c-header-overlay
           sha256sum "$OO_PS4_TOOLCHAIN/include/math.h" > build/cxx-evidence/original-sdk-math.sha256
           python3 -m unittest discover -s experiments/orbis_cxx20 -p 'test_*.py' -v
-      - name: Verify target library availability with real ELF links
+      - name: Select reviewed Orbis runtime and filesystem paths
         run: |
           python3 experiments/orbis_cxx20/probe_sdk_libraries.py --output build/cxx-evidence/sdk-probes
-      - name: Select musl locale and conservative atomic wait for Orbis
-        run: |
-          python3 experiments/orbis_cxx20/prepare_runtime.py --source vendor/llvm-project
+          python3 experiments/orbis_cxx20/prepare_filesystem.py --source vendor/llvm-project
           git -C vendor/llvm-project diff -- libcxx libcxxabi libunwind > build/cxx-evidence/llvm-orbis.patch
       - name: Configure isolated LLVM C++ runtimes for Orbis
         run: |
@@ -177,6 +175,9 @@ jobs:
           tar --exclude=.git --exclude=test --exclude=tests -czf build/cxx-evidence/llvm-runtime-sources.tar.gz \
             -C vendor/llvm-project cmake runtimes libcxx libc libcxxabi libunwind llvm/cmake
           if test -d build/cxx-prefix; then tar -czf build/cxx-evidence/runtime-prefix.tar.gz -C build cxx-prefix; fi
+          if test -d "${OO_PS4_TOOLCHAIN:-}/include"; then
+            tar -czf build/cxx-evidence/public-sdk-inputs.tar.gz -C "$OO_PS4_TOOLCHAIN" include lib link.x bin/linux/create-fself
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
