@@ -11,7 +11,9 @@ import signal
 import subprocess
 import time
 
-EXPECTED = {'test': 'orbis_modern_cxx_runtime', 'passed': True, 'libcpp_version': 200108,
+# Audited libcxx/include/__config at 87f0227cb60147a26a1eeb4fb06e3b505e9c7261:
+# _LIBCPP_VERSION is 200100 even though the release tag is llvmorg-20.1.8.
+EXPECTED = {'test': 'orbis_modern_cxx_runtime', 'passed': True, 'libcpp_version': 200100,
     'math_locale_ranges': True, 'exception_unwind_rtti': True, 'atomic_ref_total': 4096,
     'tls_destructors': 2, 'barrier_phases': 8, 'atomic_wait_notify': True,
     'jthread_stop_wait': True, 'filesystem': True, 'random_reads': 4,
