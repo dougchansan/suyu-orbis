@@ -4,9 +4,9 @@ The objective is a native OpenOrbis/PS4 host for the user's Suyu AOT work. Do no
 
 ## Current continuation task
 
-Read [docs/PORT_PROGRESS.md](docs/PORT_PROGRESS.md) and [docs/LOCAL_AGENT_HANDOFF.md](docs/LOCAL_AGENT_HANDOFF.md) first. They make the local-agent handoff persistent and distinguish the passing native AOT display diagnostic from the still-failing complete Suyu Linux build.
+Read [docs/PORT_PROGRESS.md](docs/PORT_PROGRESS.md) and [docs/LOCAL_AGENT_HANDOFF.md](docs/LOCAL_AGENT_HANDOFF.md) first. They distinguish the passing Linux scheduled-process test, native Orbis runtime/Common tests, kernel object compilation, and the still-unvalidated full Orbis core.
 
-Preserve the verified native diagnostic as a regression baseline. The immediate work is to reproduce and repair the real no-JIT core build, execute the existing limited smoke, then prove normal process/thread SVC dispatch and carry the real core to Orbis. Do not replace that task with a larger synthetic framebuffer demo or extend the private diagnostic SVC protocol into fake Horizon services.
+Preserve the verified native diagnostic as a regression baseline. The Linux no-JIT process/thread regression is already passing. The immediate work is to link that real core on Orbis using the validated runtime/Common adaptations and satisfy the remaining native dependencies. Read [docs/ORBIS_RUNTIME.md](docs/ORBIS_RUNTIME.md) and retain the independent kernel object gate. Do not replace that task with a larger synthetic framebuffer demo or extend the private diagnostic SVC protocol into fake Horizon services.
 
 Read README.md, docs/NATIVE_ORBIS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, and docs/VALIDATION.md for implementation contracts and historical evidence. Current stage status is recorded in PORT_PROGRESS.md; historical passing results do not establish a newer or different test. Start with `python3 scripts/doctor.py` and the host CMake preset. Run the complete host tests after changes. Use `CC=clang` with host-sanitize. The actual-emitter test is separate: `scripts/test_upstream.py` verifies its pinned header before building. The newer native test and standalone Orbis instructions are in NATIVE_ORBIS.md.
 

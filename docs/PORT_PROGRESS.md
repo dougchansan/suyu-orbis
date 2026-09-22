@@ -1,49 +1,37 @@
 # Port progress: native Suyu title on Orbis
 
-This is an evidence ledger, not a completion percentage. The project has now proved Suyu-generated AArch64 executing through a real Suyu process/thread scheduler and normal Horizon SVC dispatch on Linux with the CPU JIT disabled. It has **not** yet proved the full Suyu core on Orbis, a native Maxwell/GPU backend, a commercial title boot, or physical-PS4 execution.
+This is an evidence ledger, not a completion percentage. Real scheduled Suyu AOT execution passes on Linux. The modern Orbis C++ runtime and actual Common components now execute successfully in shadPS4, and the original CPU/kernel source slice cross-compiles for Orbis. The full Suyu core is **not yet linked and executing on Orbis**, and no title/GPU/hardware result is claimed.
 
-## Current checkpoint
+## Current checkpoints
 
-Development branch: `full-core-linux-smoke`  
-Scheduled-process implementation: `4f3f3974eee5ce104ff24c20deac6b721c1cf2e3`  
-Pinned Suyu: `e6f53df9f160903fd15ed2b0cd91ac60f1f43428`  
-Clean full-core CI: [run 35271227961](https://github.com/dougchansan/suyu-orbis/actions/runs/35271227961)  
-Host/OpenOrbis regression CI: [run 35271227969](https://github.com/dougchansan/suyu-orbis/actions/runs/35271227969)
-
-Read `deps.lock.json` before changing the exporter, generated runtime, ABI contract, or pinned Suyu revision.
-
-| Gate | Result | Evidence / boundary |
+| Checkpoint | Code revision | Verified run |
 |---|---|---|
-| Actual Suyu exporter, original AArch64, native host execution | **Pass** | Existing native regression plus run 35271227969 |
-| Checked memory, AOT yield/resume, Clang ASan/UBSan | **Pass** | Existing native regression; host Clang job remains green in run 35271227969 |
-| OpenOrbis static link and PS4 executable conversion | **Pass** | OpenOrbis job remains green in run 35271227969 |
-| Guest AOT-written frames through native VideoOut in shadPS4 | **Pass** | Existing native four-frame + standalone evidence; this is not Suyu GPU rendering |
-| Complete no-JIT Suyu Linux configuration | **Pass** | Run 35271227961 |
-| Complete no-JIT Suyu Linux combined build/link | **Pass** | `core`, bridge, static bundle, direct-call smoke, and scheduled-process smoke all linked in run 35271227961 |
-| Limited real-HLE `ArmRecomp` smoke | **Pass** | Historical direct `GetSystemTick` fixture retained and passed in run 35271227961 |
-| Normal real process/thread/scheduler SVC dispatch and AOT resume | **Pass on Linux** | New scheduled-process regression passed in run 35271227961 |
-| Dynamic guest CPU/JIT backend absent from full-core binaries | **Pass at symbol gate** | No `Dynarmic::`, `ArmDynarmic`, or `__jit_debug_register_code` in either full-core test binary in run 35271227961 |
-| Real Suyu core and Horizon host platform on Orbis | **Not validated** | Native Orbis diagnostic still uses the smaller native executor |
-| Native GPU shader/Maxwell rendering | **Not validated** | Existing displayed diagnostic uses guest CPU framebuffer stores |
-| Actual private title entry / headless boot | **Not validated** | No commercial title used by public CI |
-| Actual title rendering/playability | **Not validated** | No game frame claim |
-| Physical PS4 execution | **Not validated** | shadPS4 evidence only |
+| Linux scheduled process/SVC implementation | `4f3f3974eee5ce104ff24c20deac6b721c1cf2e3` | [35271227961](https://github.com/dougchansan/suyu-orbis/actions/runs/35271227961) |
+| Native AOT framebuffer implementation | `25874425ad97238853b245667aa33ca7b51e2c2d` | [34916702772](https://github.com/dougchansan/suyu-orbis/actions/runs/34916702772) |
+| Native C++20 and real Common execution | `cf5eaf1f9f516a31b5324a61e0e638b701da85a7` | [35686596568](https://github.com/dougchansan/suyu-orbis/actions/runs/35686596568) |
+| Native tests repeated plus kernel compilation | `e3aaaa7d740a73452f064aefb49b079f358aa841` | [35687819373](https://github.com/dougchansan/suyu-orbis/actions/runs/35687819373) |
 
-## Scheduled-process milestone
+Development branch: `full-core-linux-smoke`. Pinned Suyu source remains `e6f53df9f160903fd15ed2b0cd91ac60f1f43428`. Read `deps.lock.json` before changing the exporter, generated runtime, ABI contract or upstream revision.
 
-Commit `4f3f3974eee5ce104ff24c20deac6b721c1cf2e3` adds a separate original AArch64 fixture and a strict report validator. The fixture is translated by the pinned real Suyu exporter, statically linked, loaded into a real `KProcess`, and executed by a real `KThread` through the normal CPU-manager/scheduler path.
+| Gate | Result | Boundary |
+|---|---|---|
+| Actual Suyu exporter and original AArch64 native execution | Pass | Existing original fixtures; not commercial title coverage |
+| Checked memory, AOT yield/resume, host ASan/UBSan | Pass | Existing host/native regression scopes |
+| OpenOrbis link/conversion and AOT-written VideoOut frames | Pass in shadPS4 | CPU framebuffer stores, not Maxwell/GPU rendering |
+| Complete no-JIT Suyu Linux build and limited direct-HLE smoke | Pass | Run 35271227961 |
+| Real Linux process/thread scheduler, normal SVC dispatch and same-CPU resume | Pass on Linux | Eight real SVCs, observed sleep/wake, clean ExitThread/shutdown |
+| Dynamic CPU/JIT backend symbol guardrail | Pass for tested binaries/objects | Symbol inspection is not proof of every execution path |
+| Modern Orbis C++ runtime | Pass in shadPS4 | 44 behavior checks; correct pinned libc++ identity |
+| Real Suyu Common host components on Orbis | Pass in shadPS4 | 1,186,039 checks; 4,096 fiber round-trips and 32 migrations |
+| Original Orbis CPU/kernel object compilation | Pass, compile-only | Clang 18.1.3, 98 units; no complete core executable |
+| Full Suyu Core::System/services/process fixture on Orbis | Not validated | Common subset and object slice are insufficient |
+| Native Maxwell/GPU shader rendering | Not validated | Independent driver/shader/backend work remains |
+| Private title entry, rendering or playability | Not validated | No commercial inputs used by public CI |
+| Physical PS4 execution | Not validated | Emulator evidence only |
 
-The clean CI report from run 35271227961 proved:
+## Linux scheduled-process evidence
 
-- real `Core::System`, `KProcess`, `KThread`, process page table, TLS and stack;
-- the same process-owned `ArmRecomp` context across SVC yields/resumes;
-- normal SVC dispatch, rather than the old direct HLE function call;
-- actual `GetSystemTick`, `GetThreadId`, `GetProcessId`, `GetCurrentProcessorNumber`, invalid-handle handling, `SleepThread`, resumed `GetSystemTick`, and `ExitThread`;
-- observed transition into `ThreadState::Waiting` during a requested 20 ms sleep and successful resume;
-- clean guest thread exit and kernel shutdown;
-- `jit_available:false`, `jit_transitions:0`, and ten observed static blocks.
-
-Validated SVC sequence:
+The original AArch64 fixture executes through real Core::System, KProcess, KThread, process memory, TLS/stack, the normal SVC dispatcher and the same process-owned ArmRecomp. No manual HLE call replaces normal dispatch. The validated sequence is:
 
 ```text
 0x1e GetSystemTick
@@ -56,45 +44,23 @@ Validated SVC sequence:
 0x0a ExitThread
 ```
 
-The clean CI report recorded a `20,169,151 ns` host-observed sleep/resume interval. Timing is evidence of waiting/resume behavior, **not** a performance benchmark.
+Run 35271227961 observed the Waiting state and a 20,169,151 ns sleep/resume interval, clean guest exit/kernel shutdown, `jit_available:false`, `jit_transitions:0`, and ten static blocks. The interval is correctness evidence, not a performance benchmark.
 
-### Static block-boundary bug found and fixed
+The first attempt debug-suspended at main+0x100 because alignment alone did not create a generated block root. An explicit branch to process_entry in the original fixture made that entry a real control-flow target. The repair was at the fixture/exporter-root level, not a fallback or scheduler hack.
 
-The first scheduled run did enter the real scheduler but debug-suspended immediately because the fixture started at `main+0x100` and that address was not a generated static lookup root. The exporter had legally merged the aligned padding into an earlier straight-line block.
+## 2026-09-22 UTC: native host gate completed
 
-The original fixture now branches explicitly to `process_entry` before the alignment padding. That makes `0x100` a real control-flow target, so the Suyu exporter emits a static block lookup entry there. This is a fixture/root-boundary correction, not a scheduler workaround or JIT fallback.
+See [ORBIS_RUNTIME.md](ORBIS_RUNTIME.md) for exact hashes, runtime versions, fixes and limits. The clean native tests use Clang 18, isolated LLVM 20.1.8 libraries, public OpenOrbis v0.5.3 and unmodified shadPS4 v0.18.0. The installed SDK is unchanged.
 
-## Native Orbis baseline
+The directory-removal adapter now calls actual rmdir when Orbis unlink returns EPERM/EISDIR, propagating other errors. The validator now checks the actual pinned `_LIBCPP_VERSION=200100`, rather than inferring 200108 from the LLVM release tag. All behavioral tests remained enabled.
 
-The earlier native diagnostic remains a mandatory regression baseline:
+Both native runtime/Common applications passed again in run 35687819373. The 98-unit CPU/kernel object gate also passed using supported Clang 18.1.3. Its remaining-undefined inventory retains normal runtime imports and unlinked real Suyu dependencies; no stubs satisfy them. The first broader CPU-memory compilation attempt reaches a Host1x/NVDEC include dependency on FFmpeg headers.
 
-- real Suyu exporter generates native C from original AArch64;
-- generated code writes the framebuffer pixels;
-- the OpenOrbis host provides checked memory and `sceVideoOut` presentation;
-- shadPS4 captures and validates deterministic frames;
-- no claim is made that this path contains the full Suyu kernel/services or Maxwell renderer.
+## Next accepted work
 
-See `docs/NATIVE_ORBIS.md` for its exact proof boundaries.
+1. Link the complete real core on Orbis, reusing the validated runtime/Common components. Satisfy Core::System, CPU memory, service, native dependency and lifecycle requirements; do not replace them with successful stubs.
+2. Run the same eight-SVC scheduled-process fixture inside an Orbis executable in shadPS4. Preserve the Linux reference and keep kernel-only original fixtures independent of game files.
+3. Independently validate a native GPU backend with actual GPU commands/shaders, then representative Suyu shader output. CPU-written patterns do not satisfy this gate.
+4. Use authorized private title inputs only after the native core is stable, then connect actual title graphics work. Distinguish first game frame, gameplay, frame pacing and physical hardware.
 
-## Next accepted work sequence
-
-1. **Port the proven process/SVC fixture to the real Suyu core on Orbis.** Build an explicit Orbis host profile and satisfy the required memory, threads/TLS, timing, synchronization/fibers, filesystem, logging and lifecycle contracts using public OpenOrbis APIs.
-2. Run the same scheduled-process regression as an Orbis executable in shadPS4. Preserve the exact Linux test as a reference and do not replace real SVC behavior with the native diagnostic's private protocol.
-3. In parallel, validate the native GPU path independently: real GPU clear/present, triangle, texture/resource updates, synchronization, then representative Suyu-generated shader output. CPU-written display patterns do not satisfy this gate.
-4. Only after the real core is stable on Orbis, use the user's authorized private static title inputs to reach process entry/rtld/main and real HLE headlessly. Keep all commercial inputs outside public Git and CI.
-5. Connect actual title Maxwell work to the validated PS4 GPU backend and distinguish first render target, first presented game frame, menu, gameplay, performance, and physical-console validation as separate milestones.
-
-## Evidence discipline
-
-Keep these claims distinct:
-
-- Linux host execution;
-- OpenOrbis cross-compilation;
-- shadPS4 execution;
-- physical PS4 execution;
-- direct HLE call versus normal scheduler/SVC dispatch;
-- CPU framebuffer output versus native GPU rendering;
-- original synthetic fixture versus private commercial title;
-- first game frame versus playable performance.
-
-Do not introduce Dynarmic/JIT fallback, fake successful services, ignore missing static blocks, or mark an emulator result as physical-device validation. Public CI must remain free of games, keys, firmware, proprietary SDK material, and commercial generated code.
+Read [LOCAL_AGENT_HANDOFF.md](LOCAL_AGENT_HANDOFF.md) for the broader implementation sequence, [NATIVE_ORBIS.md](NATIVE_ORBIS.md) for the AOT display regression, and the current runtime guide before repeating a historical failure. A compile-only pass, emulator result, native syscall test and full scheduled Horizon execution are separate claims.
